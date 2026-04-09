@@ -1,0 +1,48 @@
+spring:
+  application:
+    name: booking_payment
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/hyperlocal_platform}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:Rajnishks@88}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      pool-name: BookingPaymentHikariPool
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:10}
+      minimum-idle: ${DB_POOL_MIN_IDLE:2}
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:10000}
+      validation-timeout: ${DB_VALIDATION_TIMEOUT_MS:5000}
+      idle-timeout: ${DB_IDLE_TIMEOUT_MS:600000}
+      max-lifetime: ${DB_MAX_LIFETIME_MS:1500000}
+      keepalive-time: ${DB_KEEPALIVE_TIME_MS:300000}
+      initialization-fail-timeout: ${DB_INIT_FAIL_TIMEOUT_MS:10000}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+  flyway:
+    enabled: ${FLYWAY_ENABLED:true}
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
+    url: ${FLYWAY_URL:${DB_URL:jdbc:mysql://localhost:3306/hyperlocal_platform}}
+    user: ${FLYWAY_USER:${DB_USERNAME:root}}
+    password: ${FLYWAY_PASSWORD:${DB_PASSWORD:Rajnishks@88}}
+
+server:
+  port: ${SERVER_PORT:8084}
+
+app:
+  security:
+    access-token-secret: ${ACCESS_TOKEN_SECRET:auth-verification-service-super-secret-key}
+    access-token-validity-seconds: ${ACCESS_TOKEN_VALIDITY_SECONDS:86400}
+    refresh-token-validity-seconds: ${REFRESH_TOKEN_VALIDITY_SECONDS:2592000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
