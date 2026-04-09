@@ -1,13 +1,13 @@
-package com.msa.booking_paymenet;
+package com.msa.booking.payment;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class BookingPaymenetApplication {
+public class BookingPaymentApplication {
 
 	public static void main(String[] args) {
-		SpringApplication.run(BookingPaymenetApplication.class, args);
+		SpringApplication.run(BookingPaymentApplication.class, args);
 	}
 
 }

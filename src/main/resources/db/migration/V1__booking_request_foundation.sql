@@ -1,0 +1,46 @@
+CREATE TABLE IF NOT EXISTS booking_requests (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  request_code VARCHAR(32) NOT NULL,
+  booking_type ENUM('LABOUR','SERVICE') NOT NULL,
+  request_mode ENUM('DIRECT','BROADCAST') NOT NULL,
+  request_status ENUM('OPEN','ACCEPTED','EXPIRED','CANCELLED','CONVERTED_TO_BOOKING') NOT NULL DEFAULT 'OPEN',
+  user_id BIGINT UNSIGNED NOT NULL,
+  address_id BIGINT UNSIGNED NOT NULL,
+  target_provider_entity_type ENUM('SERVICE_PROVIDER','LABOUR') NULL,
+  target_provider_entity_id BIGINT UNSIGNED NULL,
+  category_id BIGINT UNSIGNED NULL,
+  subcategory_id BIGINT UNSIGNED NULL,
+  scheduled_start_at DATETIME NOT NULL,
+  expires_at DATETIME NOT NULL,
+  price_min_amount DECIMAL(12,2) NULL,
+  price_max_amount DECIMAL(12,2) NULL,
+  search_latitude DECIMAL(10,7) NULL,
+  search_longitude DECIMAL(10,7) NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_booking_requests_request_code (request_code),
+  KEY idx_booking_requests_user_status_created (user_id, request_status, created_at),
+  KEY idx_booking_requests_target_provider (target_provider_entity_type, target_provider_entity_id),
+  KEY idx_booking_requests_expires_at (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS booking_request_candidates (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  request_id BIGINT UNSIGNED NOT NULL,
+  provider_entity_type ENUM('SERVICE_PROVIDER','LABOUR') NOT NULL,
+  provider_entity_id BIGINT UNSIGNED NOT NULL,
+  candidate_status ENUM('PENDING','ACCEPTED','REJECTED','EXPIRED','CLOSED') NOT NULL DEFAULT 'PENDING',
+  quoted_price_amount DECIMAL(12,2) NULL,
+  distance_km DECIMAL(8,2) NULL,
+  notified_at DATETIME NOT NULL,
+  responded_at DATETIME NULL,
+  expires_at DATETIME NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_booking_request_candidates_request_status (request_id, candidate_status),
+  KEY idx_booking_request_candidates_provider_status (provider_entity_type, provider_entity_id, candidate_status),
+  CONSTRAINT fk_booking_request_candidates_request FOREIGN KEY (request_id) REFERENCES booking_requests(id)
+    ON UPDATE RESTRICT ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

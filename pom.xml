@@ -9,10 +9,10 @@
 		<relativePath/> <!-- lookup parent from repository -->
 	</parent>
 	<groupId>com.msa</groupId>
-	<artifactId>booking_paymenet</artifactId>
+	<artifactId>booking_payment</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
-	<name/>
-	<description/>
+	<name>booking_payment</name>
+	<description>Booking and payment service for MultiSuperApp</description>
 	<url/>
 	<licenses>
 		<license/>
