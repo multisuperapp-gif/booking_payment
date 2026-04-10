@@ -1,0 +1,13 @@
+spring:
+  config:
+    activate:
+      on-profile: sit
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+
+logging:
+  level:
+    root: DEBUG

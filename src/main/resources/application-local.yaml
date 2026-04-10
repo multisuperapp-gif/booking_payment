@@ -1,0 +1,57 @@
+spring:
+  application:
+    name: booking_payment
+  datasource:
+    url: ${DB_URL:jdbc:mysql://multisuperapp1.cituis86a8r2.us-east-1.rds.amazonaws.com:3306/hyperlocal_platform}
+    username: ${DB_USERNAME:admin}
+    password: ${DB_PASSWORD:multisuperapp1}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      pool-name: BookingPaymentHikariPool
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:10}
+      minimum-idle: ${DB_POOL_MIN_IDLE:2}
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:10000}
+      validation-timeout: ${DB_VALIDATION_TIMEOUT_MS:5000}
+      idle-timeout: ${DB_IDLE_TIMEOUT_MS:600000}
+      max-lifetime: ${DB_MAX_LIFETIME_MS:1500000}
+      keepalive-time: ${DB_KEEPALIVE_TIME_MS:300000}
+      initialization-fail-timeout: ${DB_INIT_FAIL_TIMEOUT_MS:10000}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+  flyway:
+    enabled: false
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
+    table: ${FLYWAY_TABLE:flyway_schema_history_booking_payment}
+    url: ${FLYWAY_URL:${DB_URL:jdbc:mysql://multisuperapp1.cituis86a8r2.us-east-1.rds.amazonaws.com:3306/hyperlocal_platform}}
+    user: ${FLYWAY_USER:${DB_USERNAME:admin}}
+    password: ${FLYWAY_PASSWORD:${DB_PASSWORD:multisuperapp1}}
+
+server:
+  port: ${SERVER_PORT:8084}
+
+app:
+  security:
+    access-token-secret: ${ACCESS_TOKEN_SECRET:auth-verification-service-super-secret-key}
+    access-token-validity-seconds: ${ACCESS_TOKEN_VALIDITY_SECONDS:86400}
+    refresh-token-validity-seconds: ${REFRESH_TOKEN_VALIDITY_SECONDS:2592000}
+  firebase:
+    enabled: ${FIREBASE_ENABLED:true}
+    service-account-path: ${FIREBASE_SERVICE_ACCOUNT_PATH:/Users/rajnishsingh/Documents/MultiSuperAppProjects/secret/multisuperapp-e1fcb-firebase-adminsdk-fbsvc-96e74b9104.json}
+  razorpay:
+    enabled: ${RAZORPAY_ENABLED:true}
+    key-id: ${RAZORPAY_KEY_ID:rzp_test_SbRBi5FzY2A5Zo}
+    key-secret: ${RAZORPAY_KEY_SECRET:YOK6nJFjQYq841rDC1LW5Fl9}
+    webhook-secret: ${RAZORPAY_WEBHOOK_SECRET:}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
