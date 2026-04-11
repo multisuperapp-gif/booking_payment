@@ -6,16 +6,6 @@ spring:
     username: ${DB_USERNAME:admin}
     password: ${DB_PASSWORD:multisuperapp1}
     driver-class-name: com.mysql.cj.jdbc.Driver
-    hikari:
-      pool-name: BookingPaymentHikariPool
-      maximum-pool-size: ${DB_POOL_MAX_SIZE:10}
-      minimum-idle: ${DB_POOL_MIN_IDLE:2}
-      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:10000}
-      validation-timeout: ${DB_VALIDATION_TIMEOUT_MS:5000}
-      idle-timeout: ${DB_IDLE_TIMEOUT_MS:600000}
-      max-lifetime: ${DB_MAX_LIFETIME_MS:1500000}
-      keepalive-time: ${DB_KEEPALIVE_TIME_MS:300000}
-      initialization-fail-timeout: ${DB_INIT_FAIL_TIMEOUT_MS:10000}
   jpa:
     hibernate:
       ddl-auto: update
