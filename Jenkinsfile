@@ -22,14 +22,14 @@ pipeline {
         IMAGE_TAG = "${APP_NAME}:${BUILD_NUMBER}"
         IMAGE_LATEST = "${APP_NAME}:latest"
 
-        EC2_HOST = "44.207.68.180"
+        EC2_HOST = "44.217.176.56"
         EC2_USER = "ubuntu"
         EC2_APP_DIR = "/home/ubuntu/booking-payment"
 
-        DEV_EC2_HOST  = "44.207.68.180"
-        SIT_EC2_HOST  = "44.207.68.180"
-        UAT_EC2_HOST  = "44.207.68.180"
-        PROD_EC2_HOST = "44.207.68.180"
+        DEV_EC2_HOST  = "44.217.176.56"
+        SIT_EC2_HOST  = "44.217.176.56"
+        UAT_EC2_HOST  = "44.217.176.56"
+        PROD_EC2_HOST = "44.217.176.56"
 
         DEV_PROFILE  = "dev"
         SIT_PROFILE  = "sit"
