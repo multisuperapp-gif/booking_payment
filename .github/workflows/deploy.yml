@@ -121,6 +121,8 @@ jobs:
               --env-file '$EC2_APP_DIR/${{ steps.target.outputs.profile }}.env' \
               -e SERVER_PORT='$APP_PORT' \
               -e SPRING_PROFILES_ACTIVE='${{ steps.target.outputs.profile }}' \
+              -e FIREBASE_SERVICE_ACCOUNT_PATH=/opt/app/secrets/firebase.json \
+              -v /home/ubuntu/firebase.json:/opt/app/secrets/firebase.json:ro \
               '$IMAGE_TAG'
           "
 
