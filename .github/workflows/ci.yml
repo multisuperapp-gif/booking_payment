@@ -28,10 +28,3 @@ jobs:
 
       - name: Build and test
         run: mvn -B clean verify
-
-      - name: Upload packaged jar
-        uses: actions/upload-artifact@v4
-        with:
-          name: booking-payment-jar
-          path: target/*.jar
-          if-no-files-found: error
