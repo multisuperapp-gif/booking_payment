@@ -15,7 +15,9 @@ import java.time.LocalDateTime;
         name = "orders",
         indexes = {
                 @Index(name = "idx_orders_user_status_created", columnList = "user_id, order_status, created_at"),
-                @Index(name = "idx_orders_shop_status_created", columnList = "shop_id, order_status, created_at")
+                @Index(name = "idx_orders_shop_status_created", columnList = "shop_id, order_status, created_at"),
+                @Index(name = "idx_orders_location_id", columnList = "shop_location_id"),
+                @Index(name = "idx_orders_address_id", columnList = "address_id")
         }
 )
 @Getter
@@ -25,7 +27,7 @@ public class OrderEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "order_code", nullable = false, length = 32, unique = true)
+    @Column(name = "order_code", nullable = false, unique = true, length = 32)
     private String orderCode;
 
     @Column(name = "user_id", nullable = false)
@@ -81,7 +83,4 @@ public class OrderEntity {
 
     @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
     private LocalDateTime createdAt;
-
-    @Column(name = "updated_at", nullable = false, insertable = false, updatable = false)
-    private LocalDateTime updatedAt;
 }

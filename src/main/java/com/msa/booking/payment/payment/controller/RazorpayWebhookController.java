@@ -21,9 +21,10 @@ public class RazorpayWebhookController {
     @PostMapping(value = "/webhook", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ApiResponse<Void> webhook(
             @RequestBody String requestBody,
-            @RequestHeader(name = "X-Razorpay-Signature") String razorpaySignature
+            @RequestHeader(name = "X-Razorpay-Signature") String razorpaySignature,
+            @RequestHeader(name = "X-Razorpay-Event-Id", required = false) String razorpayEventId
     ) {
-        razorpayWebhookService.processWebhook(requestBody, razorpaySignature);
+        razorpayWebhookService.processWebhook(requestBody, razorpaySignature, razorpayEventId);
         return ApiResponse.success("Razorpay webhook processed successfully", null);
     }
 }

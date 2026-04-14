@@ -5,6 +5,8 @@ import java.math.BigDecimal;
 public interface RazorpayGatewayService {
     RazorpayOrderData createOrder(String receipt, BigDecimal amount, String currency);
 
+    String configuredKeyId();
+
     boolean verifyPaymentSignature(String razorpayOrderId, String razorpayPaymentId, String razorpaySignature);
 
     boolean verifyWebhookSignature(String requestBody, String razorpaySignature);

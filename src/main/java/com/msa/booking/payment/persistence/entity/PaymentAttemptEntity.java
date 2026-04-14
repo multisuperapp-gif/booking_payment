@@ -9,13 +9,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(
-        name = "payment_attempts",
-        indexes = {
-                @Index(name = "idx_payment_attempts_payment_id", columnList = "payment_id"),
-                @Index(name = "idx_payment_attempts_gateway_order_id", columnList = "gateway_order_id")
-        }
-)
+@Table(name = "payment_attempts")
 @Getter
 @Setter
 public class PaymentAttemptEntity {
@@ -36,7 +30,7 @@ public class PaymentAttemptEntity {
     @Column(name = "attempt_status", nullable = false, length = 20)
     private PaymentAttemptStatus attemptStatus;
 
-    @Column(name = "requested_amount", nullable = false, precision = 12, scale = 2)
+    @Column(name = "requested_amount", nullable = false)
     private BigDecimal requestedAmount;
 
     @Column(name = "response_code", length = 50)
@@ -44,4 +38,5 @@ public class PaymentAttemptEntity {
 
     @Column(name = "attempted_at", nullable = false)
     private LocalDateTime attemptedAt;
+
 }

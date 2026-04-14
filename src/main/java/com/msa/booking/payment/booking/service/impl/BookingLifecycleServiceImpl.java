@@ -8,6 +8,7 @@ import com.msa.booking.payment.domain.enums.*;
 import com.msa.booking.payment.persistence.entity.*;
 import com.msa.booking.payment.persistence.repository.*;
 import com.msa.booking.payment.booking.support.BookingHistoryService;
+import com.msa.booking.payment.modules.settlement.service.SettlementLifecycleService;
 import com.msa.booking.payment.notification.service.NotificationService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,6 +17,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.temporal.TemporalAdjusters;
 import java.util.List;
+import java.util.Optional;
 import java.util.Random;
 
 @Service
@@ -32,6 +34,7 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
     private final BookingPolicyService bookingPolicyService;
     private final BookingHistoryService bookingHistoryService;
     private final NotificationService notificationService;
+    private final SettlementLifecycleService settlementLifecycleService;
     private final Random random = new Random();
 
     public BookingLifecycleServiceImpl(
@@ -44,7 +47,8 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
             RefundRepository refundRepository,
             BookingPolicyService bookingPolicyService,
             BookingHistoryService bookingHistoryService,
-            NotificationService notificationService
+            NotificationService notificationService,
+            SettlementLifecycleService settlementLifecycleService
     ) {
         this.bookingRepository = bookingRepository;
         this.paymentRepository = paymentRepository;
@@ -56,6 +60,7 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
         this.bookingPolicyService = bookingPolicyService;
         this.bookingHistoryService = bookingHistoryService;
         this.notificationService = notificationService;
+        this.settlementLifecycleService = settlementLifecycleService;
     }
 
     @Override
@@ -337,16 +342,15 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
         if (payment == null) {
             return;
         }
-        RefundEntity refund = new RefundEntity();
-        refund.setPaymentId(payment.getId());
-        refund.setRefundCode("RFN-" + booking.getBookingCode());
-        refund.setRefundStatus(RefundLifecycleStatus.REJECTED);
-        refund.setRequestedAmount(payment.getAmount());
-        refund.setApprovedAmount(BigDecimal.ZERO);
-        refund.setReason("User cancelled after work started. No refund to user; provider half-share applies offline.");
-        refund.setInitiatedAt(LocalDateTime.now());
-        refund.setCompletedAt(LocalDateTime.now());
-        refundRepository.save(refund);
+        upsertRefund(
+                payment,
+                "RFN-" + booking.getBookingCode(),
+                RefundLifecycleStatus.REJECTED,
+                payment.getAmount(),
+                BigDecimal.ZERO,
+                "User cancelled after work started. No refund to user; provider half-share applies offline."
+        );
+        notifyBookingRefundRejected(booking, payment);
     }
 
     private void applyFullRefundIfPaid(BookingEntity booking, String reason) {
@@ -363,13 +367,56 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
         payment.setPaymentStatus(PaymentLifecycleStatus.REFUNDED);
         payment.setCompletedAt(LocalDateTime.now());
         paymentRepository.save(payment);
+        upsertRefund(
+                payment,
+                "RFN-" + payment.getPaymentCode(),
+                RefundLifecycleStatus.SUCCESS,
+                payment.getAmount(),
+                payment.getAmount(),
+                reason
+        );
+        settlementLifecycleService.recordSuccessfulRefund(payment, payment.getAmount());
+        notifyBookingRefundSuccess(booking, payment);
+    }
+
+    private void upsertRefund(
+            PaymentEntity payment,
+            String refundCode,
+            RefundLifecycleStatus refundStatus,
+            BigDecimal requestedAmount,
+            BigDecimal approvedAmount,
+            String reason
+    ) {
+        Optional<RefundEntity> existingRefund = refundRepository.findTopByPaymentIdOrderByIdDesc(payment.getId());
+        if (existingRefund.isPresent()) {
+            RefundEntity refund = existingRefund.get();
+            refund.setRefundStatus(refundStatus);
+            if (refund.getRefundCode() == null || refund.getRefundCode().isBlank()) {
+                refund.setRefundCode(refundCode);
+            }
+            if (refund.getRequestedAmount() == null) {
+                refund.setRequestedAmount(requestedAmount);
+            }
+            refund.setApprovedAmount(approvedAmount);
+            if (refund.getReason() == null || refund.getReason().isBlank()) {
+                refund.setReason(reason);
+            }
+            if (refund.getInitiatedAt() == null) {
+                refund.setInitiatedAt(LocalDateTime.now());
+            }
+            if (refund.getCompletedAt() == null) {
+                refund.setCompletedAt(LocalDateTime.now());
+            }
+            refundRepository.save(refund);
+            return;
+        }
 
         RefundEntity refund = new RefundEntity();
         refund.setPaymentId(payment.getId());
-        refund.setRefundCode("RFN-" + payment.getPaymentCode());
-        refund.setRefundStatus(RefundLifecycleStatus.SUCCESS);
-        refund.setRequestedAmount(payment.getAmount());
-        refund.setApprovedAmount(payment.getAmount());
+        refund.setRefundCode(refundCode);
+        refund.setRefundStatus(refundStatus);
+        refund.setRequestedAmount(requestedAmount);
+        refund.setApprovedAmount(approvedAmount);
         refund.setReason(reason);
         refund.setInitiatedAt(LocalDateTime.now());
         refund.setCompletedAt(LocalDateTime.now());
@@ -408,6 +455,34 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
     private BookingEntity loadBooking(Long bookingId) {
         return bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new BadRequestException("Booking not found."));
+    }
+
+    private void notifyBookingRefundSuccess(BookingEntity booking, PaymentEntity payment) {
+        notificationService.notifyUser(
+                booking.getUserId(),
+                "BOOKING_REFUND_SUCCESS",
+                "Refund completed",
+                "Your refund has been completed for the cancelled booking.",
+                java.util.Map.of(
+                        "bookingId", booking.getId(),
+                        "bookingCode", booking.getBookingCode(),
+                        "paymentCode", payment.getPaymentCode()
+                )
+        );
+    }
+
+    private void notifyBookingRefundRejected(BookingEntity booking, PaymentEntity payment) {
+        notificationService.notifyUser(
+                booking.getUserId(),
+                "BOOKING_REFUND_REJECTED",
+                "No refund applicable",
+                "This booking cancellation does not qualify for a refund under the current policy.",
+                java.util.Map.of(
+                        "bookingId", booking.getId(),
+                        "bookingCode", booking.getBookingCode(),
+                        "paymentCode", payment.getPaymentCode()
+                )
+        );
     }
 
     private String generateOtpCode() {

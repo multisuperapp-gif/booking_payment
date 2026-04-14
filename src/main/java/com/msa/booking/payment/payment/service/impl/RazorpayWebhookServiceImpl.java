@@ -6,6 +6,7 @@ import com.msa.booking.payment.booking.support.BookingHistoryService;
 import com.msa.booking.payment.common.exception.BadRequestException;
 import com.msa.booking.payment.domain.enums.*;
 import com.msa.booking.payment.notification.service.NotificationService;
+import com.msa.booking.payment.modules.payment.service.PaymentWebhookEventService;
 import com.msa.booking.payment.payment.service.RazorpayGatewayService;
 import com.msa.booking.payment.payment.service.RazorpayWebhookService;
 import com.msa.booking.payment.persistence.entity.*;
@@ -30,6 +31,7 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
     private final ShopOrderSupportRepository shopOrderSupportRepository;
     private final BookingHistoryService bookingHistoryService;
     private final NotificationService notificationService;
+    private final PaymentWebhookEventService paymentWebhookEventService;
 
     public RazorpayWebhookServiceImpl(
             RazorpayGatewayService razorpayGatewayService,
@@ -43,7 +45,8 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
             BookingSupportRepository bookingSupportRepository,
             ShopOrderSupportRepository shopOrderSupportRepository,
             BookingHistoryService bookingHistoryService,
-            NotificationService notificationService
+            NotificationService notificationService,
+            PaymentWebhookEventService paymentWebhookEventService
     ) {
         this.razorpayGatewayService = razorpayGatewayService;
         this.objectMapper = objectMapper;
@@ -57,11 +60,12 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
         this.shopOrderSupportRepository = shopOrderSupportRepository;
         this.bookingHistoryService = bookingHistoryService;
         this.notificationService = notificationService;
+        this.paymentWebhookEventService = paymentWebhookEventService;
     }
 
     @Override
     @Transactional
-    public void processWebhook(String requestBody, String razorpaySignature) {
+    public void processWebhook(String requestBody, String razorpaySignature, String razorpayEventId) {
         if (!razorpayGatewayService.verifyWebhookSignature(requestBody, razorpaySignature)) {
             throw new BadRequestException("Invalid Razorpay webhook signature.");
         }
@@ -77,6 +81,7 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
         if (paymentNode.isMissingNode()) {
             return;
         }
+        String webhookKey = paymentWebhookEventService.resolveWebhookKey(razorpayEventId, requestBody);
 
         String gatewayOrderId = paymentNode.path("order_id").asText("");
         String gatewayPaymentId = paymentNode.path("id").asText("");
@@ -91,16 +96,34 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
         }
         PaymentEntity payment = paymentRepository.findById(attempt.getPaymentId())
                 .orElseThrow(() -> new BadRequestException("Payment not found for Razorpay webhook."));
+        if (!paymentWebhookEventService.registerIfFirst(
+                "LEGACY_PAYMENT",
+                webhookKey,
+                event,
+                gatewayOrderId,
+                gatewayPaymentId,
+                payment.getId()
+        )) {
+            return;
+        }
 
         switch (event) {
-            case "payment.captured", "order.paid" -> markSuccess(payment, attempt, gatewayOrderId, gatewayPaymentId);
-            case "payment.failed" -> markFailure(payment, attempt, gatewayOrderId, paymentNode.path("error_code").asText("failed"));
-            default -> {
+            case "payment.captured", "order.paid" -> {
+                markSuccess(payment, attempt, gatewayOrderId, gatewayPaymentId);
+                paymentWebhookEventService.markProcessed("LEGACY_PAYMENT", webhookKey, true, "Payment captured");
             }
+            case "payment.failed" -> {
+                markFailure(payment, attempt, gatewayOrderId, paymentNode.path("error_code").asText("failed"));
+                paymentWebhookEventService.markProcessed("LEGACY_PAYMENT", webhookKey, true, "Payment marked failed");
+            }
+            default -> paymentWebhookEventService.markProcessed("LEGACY_PAYMENT", webhookKey, false, "Ignored: unsupported event");
         }
     }
 
     private void markSuccess(PaymentEntity payment, PaymentAttemptEntity attempt, String gatewayOrderId, String gatewayPaymentId) {
+        if (isLateSuccessIgnored(payment)) {
+            return;
+        }
         if (paymentTransactionRepository.findByGatewayTransactionId(gatewayPaymentId).isPresent()) {
             return;
         }
@@ -170,6 +193,9 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
     }
 
     private void markFailure(PaymentEntity payment, PaymentAttemptEntity attempt, String gatewayOrderId, String failureCode) {
+        if (isLateFailureIgnored(payment)) {
+            return;
+        }
         payment.setPaymentStatus(PaymentLifecycleStatus.FAILED);
         payment.setCompletedAt(LocalDateTime.now());
         paymentRepository.save(payment);
@@ -233,5 +259,42 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
         for (OrderItemEntity item : orderItemRepository.findByOrderId(order.getId())) {
             shopOrderSupportRepository.releaseReservedInventory(item.getVariantId(), item.getQuantity());
         }
+    }
+
+    private boolean isLateSuccessIgnored(PaymentEntity payment) {
+        if (payment.getPaymentStatus() == PaymentLifecycleStatus.FAILED
+                || payment.getPaymentStatus() == PaymentLifecycleStatus.CANCELLED
+                || payment.getPaymentStatus() == PaymentLifecycleStatus.REFUNDED) {
+            return true;
+        }
+        if (payment.getPayableType() == PayableType.BOOKING) {
+            BookingEntity booking = bookingRepository.findById(payment.getPayableId())
+                    .orElseThrow(() -> new BadRequestException("Booking not found for payment webhook."));
+            return booking.getBookingStatus() == BookingLifecycleStatus.CANCELLED
+                    || booking.getPaymentStatus() == PayablePaymentStatus.FAILED
+                    || booking.getPaymentStatus() == PayablePaymentStatus.REFUNDED;
+        }
+        OrderEntity order = orderRepository.findById(payment.getPayableId())
+                .orElseThrow(() -> new BadRequestException("Order not found for payment webhook."));
+        return order.getOrderStatus() == OrderLifecycleStatus.CANCELLED
+                || order.getPaymentStatus() == PayablePaymentStatus.FAILED
+                || order.getPaymentStatus() == PayablePaymentStatus.REFUNDED;
+    }
+
+    private boolean isLateFailureIgnored(PaymentEntity payment) {
+        if (payment.getPaymentStatus() == PaymentLifecycleStatus.SUCCESS
+                || payment.getPaymentStatus() == PaymentLifecycleStatus.REFUNDED) {
+            return true;
+        }
+        if (payment.getPayableType() == PayableType.BOOKING) {
+            BookingEntity booking = bookingRepository.findById(payment.getPayableId())
+                    .orElseThrow(() -> new BadRequestException("Booking not found for payment webhook."));
+            return booking.getPaymentStatus() == PayablePaymentStatus.PAID
+                    || booking.getPaymentStatus() == PayablePaymentStatus.REFUNDED;
+        }
+        OrderEntity order = orderRepository.findById(payment.getPayableId())
+                .orElseThrow(() -> new BadRequestException("Order not found for payment webhook."));
+        return order.getPaymentStatus() == PayablePaymentStatus.PAID
+                || order.getPaymentStatus() == PayablePaymentStatus.REFUNDED;
     }
 }

@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -70,12 +71,12 @@ public class NotificationServiceImpl implements NotificationService {
             delivery.setChannel("PUSH");
             delivery.setDeliveryStatus("PENDING");
             try {
+                Map<String, String> data = buildDataPayload(saved.getId(), type, payload);
                 String messageId = FirebaseMessaging.getInstance().send(
                         Message.builder()
                                 .setToken(pushToken.getPushToken())
                                 .setNotification(Notification.builder().setTitle(title).setBody(body).build())
-                                .putData("type", type)
-                                .putData("notificationId", String.valueOf(saved.getId()))
+                                .putAllData(data)
                                 .build()
                 );
                 delivery.setDeliveryStatus("SENT");
@@ -103,5 +104,20 @@ public class NotificationServiceImpl implements NotificationService {
         } catch (JsonProcessingException exception) {
             return null;
         }
+    }
+
+    private Map<String, String> buildDataPayload(Long notificationId, String type, Map<String, Object> payload) {
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("type", type == null ? "" : type);
+        data.put("notificationId", String.valueOf(notificationId));
+        if (payload != null) {
+            payload.forEach((key, value) -> {
+                if (key == null || key.isBlank() || value == null) {
+                    return;
+                }
+                data.put(key, String.valueOf(value));
+            });
+        }
+        return data;
     }
 }

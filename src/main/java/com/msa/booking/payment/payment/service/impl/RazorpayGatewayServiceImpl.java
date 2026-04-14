@@ -48,6 +48,11 @@ public class RazorpayGatewayServiceImpl implements RazorpayGatewayService {
     }
 
     @Override
+    public String configuredKeyId() {
+        return razorpayProperties.getKeyId();
+    }
+
+    @Override
     public boolean verifyPaymentSignature(String razorpayOrderId, String razorpayPaymentId, String razorpaySignature) {
         try {
             String payload = razorpayOrderId + "|" + razorpayPaymentId;

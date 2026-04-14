@@ -7,4 +7,6 @@ import java.util.Optional;
 
 public interface RefundRepository extends JpaRepository<RefundEntity, Long> {
     Optional<RefundEntity> findByRefundCode(String refundCode);
+
+    Optional<RefundEntity> findTopByPaymentIdOrderByIdDesc(Long paymentId);
 }

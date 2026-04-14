@@ -10,6 +10,7 @@ import com.msa.booking.payment.domain.enums.PayableType;
 import com.msa.booking.payment.domain.enums.PaymentLifecycleStatus;
 import com.msa.booking.payment.domain.enums.RefundLifecycleStatus;
 import com.msa.booking.payment.notification.service.NotificationService;
+import com.msa.booking.payment.modules.settlement.service.SettlementLifecycleService;
 import com.msa.booking.payment.order.dto.*;
 import com.msa.booking.payment.order.projection.ShopCheckoutItemProjection;
 import com.msa.booking.payment.order.projection.ShopDeliveryRuleProjection;
@@ -51,6 +52,7 @@ public class ShopOrderServiceImpl implements ShopOrderService {
     private final BookingHistoryService bookingHistoryService;
     private final NotificationService notificationService;
     private final RazorpayGatewayService razorpayGatewayService;
+    private final SettlementLifecycleService settlementLifecycleService;
 
     public ShopOrderServiceImpl(
             OrderRepository orderRepository,
@@ -63,7 +65,8 @@ public class ShopOrderServiceImpl implements ShopOrderService {
             BookingPolicyService bookingPolicyService,
             BookingHistoryService bookingHistoryService,
             NotificationService notificationService,
-            RazorpayGatewayService razorpayGatewayService
+            RazorpayGatewayService razorpayGatewayService,
+            SettlementLifecycleService settlementLifecycleService
     ) {
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
@@ -76,6 +79,7 @@ public class ShopOrderServiceImpl implements ShopOrderService {
         this.bookingHistoryService = bookingHistoryService;
         this.notificationService = notificationService;
         this.razorpayGatewayService = razorpayGatewayService;
+        this.settlementLifecycleService = settlementLifecycleService;
     }
 
     @Override
@@ -165,6 +169,16 @@ public class ShopOrderServiceImpl implements ShopOrderService {
         if (payment.getPaymentStatus() == PaymentLifecycleStatus.SUCCESS) {
             throw new BadRequestException("Payment is already completed for this order.");
         }
+        PaymentAttemptEntity latestAttempt = paymentAttemptRepository
+                .findTopByPaymentIdAndGatewayNameOrderByIdDesc(payment.getId(), "RAZORPAY")
+                .orElse(null);
+        if (isReusablePendingAttempt(latestAttempt)) {
+            payment.setPaymentStatus(PaymentLifecycleStatus.PENDING);
+            paymentRepository.save(payment);
+            order.setPaymentStatus(PayablePaymentStatus.PENDING);
+            orderRepository.save(order);
+            return toData(order, payment.getPaymentCode(), razorpayGatewayService.configuredKeyId(), latestAttempt.getGatewayOrderId(), "Payment already initiated for shop order.");
+        }
         RazorpayGatewayService.RazorpayOrderData gatewayOrder = razorpayGatewayService.createOrder(
                 payment.getPaymentCode(),
                 payment.getAmount(),
@@ -205,6 +219,14 @@ public class ShopOrderServiceImpl implements ShopOrderService {
     public ShopOrderData markPaymentSuccess(CompleteShopOrderPaymentRequest request) {
         OrderEntity order = loadOrder(request.orderId());
         PaymentEntity payment = loadPaymentForOrder(request.paymentCode(), order.getId());
+        if (payment.getPaymentStatus() == PaymentLifecycleStatus.SUCCESS
+                || payment.getPaymentStatus() == PaymentLifecycleStatus.REFUNDED) {
+            return toData(order, payment.getPaymentCode(), null, request.razorpayOrderId(), "Shop order payment was already finalized.");
+        }
+        if (order.getOrderStatus() == OrderLifecycleStatus.CANCELLED
+                || payment.getPaymentStatus() == PaymentLifecycleStatus.FAILED) {
+            return toData(order, payment.getPaymentCode(), null, request.razorpayOrderId(), "Shop order is already cancelled, so late payment success was ignored.");
+        }
         PaymentAttemptEntity attempt = paymentAttemptRepository.findFirstByGatewayOrderIdOrderByAttemptedAtDesc(request.razorpayOrderId())
                 .orElseThrow(() -> new BadRequestException("Razorpay payment attempt not found."));
         if (!attempt.getPaymentId().equals(payment.getId())) {
@@ -273,6 +295,16 @@ public class ShopOrderServiceImpl implements ShopOrderService {
     public ShopOrderData markPaymentFailure(CompleteShopOrderPaymentRequest request) {
         OrderEntity order = loadOrder(request.orderId());
         PaymentEntity payment = loadPaymentForOrder(request.paymentCode(), order.getId());
+        if (payment.getPaymentStatus() == PaymentLifecycleStatus.FAILED
+                && order.getOrderStatus() == OrderLifecycleStatus.CANCELLED) {
+            return toData(order, payment.getPaymentCode(), null, request.razorpayOrderId(), "Shop order payment failure was already recorded.");
+        }
+        if (payment.getPaymentStatus() == PaymentLifecycleStatus.SUCCESS
+                || payment.getPaymentStatus() == PaymentLifecycleStatus.REFUNDED
+                || order.getPaymentStatus() == PayablePaymentStatus.PAID
+                || order.getPaymentStatus() == PayablePaymentStatus.REFUNDED) {
+            return toData(order, payment.getPaymentCode(), null, request.razorpayOrderId(), "Shop order payment is already finalized, so late payment failure was ignored.");
+        }
         PaymentAttemptEntity attempt = paymentAttemptRepository.findFirstByGatewayOrderIdOrderByAttemptedAtDesc(request.razorpayOrderId())
                 .orElseThrow(() -> new BadRequestException("Razorpay payment attempt not found."));
         if (!attempt.getPaymentId().equals(payment.getId())) {
@@ -355,7 +387,7 @@ public class ShopOrderServiceImpl implements ShopOrderService {
             throw new BadRequestException("Order cannot be cancelled after it is out for delivery.");
         }
         if (order.getOrderStatus() == OrderLifecycleStatus.CANCELLED) {
-            throw new BadRequestException("Order is already cancelled.");
+            return toData(order, loadPaymentCode(order.getId()), null, null, "Shop order was already cancelled.");
         }
 
         handleOrderCancellation(order, request.reason(), request.userId());
@@ -518,11 +550,32 @@ public class ShopOrderServiceImpl implements ShopOrderService {
     private void applyFullRefund(OrderEntity order, String reason) {
         PaymentEntity payment = paymentRepository.findByPayableTypeAndPayableId(PayableType.ORDER, order.getId())
                 .orElseThrow(() -> new BadRequestException("Order payment not found."));
+        Optional<RefundEntity> existingRefund = refundRepository.findTopByPaymentIdOrderByIdDesc(payment.getId());
+
         payment.setPaymentStatus(PaymentLifecycleStatus.REFUNDED);
         payment.setCompletedAt(LocalDateTime.now());
         paymentRepository.save(payment);
 
         order.setPaymentStatus(PayablePaymentStatus.REFUNDED);
+
+        if (existingRefund.isPresent()) {
+            RefundEntity refund = existingRefund.get();
+            if (refund.getRefundStatus() == RefundLifecycleStatus.SUCCESS) {
+                if (refund.getApprovedAmount() == null) {
+                    refund.setApprovedAmount(payment.getAmount());
+                }
+                if (refund.getCompletedAt() == null) {
+                    refund.setCompletedAt(LocalDateTime.now());
+                }
+                if (refund.getReason() == null || refund.getReason().isBlank()) {
+                    refund.setReason(reason);
+                }
+                refundRepository.save(refund);
+                settlementLifecycleService.recordSuccessfulRefund(payment, refund.getApprovedAmount());
+                notifyOrderRefundSuccess(order, refund);
+                return;
+            }
+        }
 
         RefundEntity refund = new RefundEntity();
         refund.setPaymentId(payment.getId());
@@ -534,6 +587,8 @@ public class ShopOrderServiceImpl implements ShopOrderService {
         refund.setInitiatedAt(LocalDateTime.now());
         refund.setCompletedAt(LocalDateTime.now());
         refundRepository.save(refund);
+        settlementLifecycleService.recordSuccessfulRefund(payment, refund.getApprovedAmount());
+        notifyOrderRefundSuccess(order, refund);
     }
 
     private PaymentEntity createPayment(OrderEntity order) {
@@ -568,10 +623,33 @@ public class ShopOrderServiceImpl implements ShopOrderService {
                 .ifPresent(ownerUserId -> notificationService.notifyUser(ownerUserId, type, title, body, payload));
     }
 
+    private void notifyOrderRefundSuccess(OrderEntity order, RefundEntity refund) {
+        notificationService.notifyUser(
+                order.getUserId(),
+                "SHOP_ORDER_REFUND_SUCCESS",
+                "Refund completed",
+                "Your refund has been completed for the cancelled shop order.",
+                Map.of(
+                        "orderId", order.getId(),
+                        "orderCode", order.getOrderCode(),
+                        "refundCode", refund.getRefundCode(),
+                        "refundStatus", refund.getRefundStatus().name()
+                )
+        );
+    }
+
     private String loadPaymentCode(Long orderId) {
         return paymentRepository.findByPayableTypeAndPayableId(PayableType.ORDER, orderId)
                 .map(PaymentEntity::getPaymentCode)
                 .orElse(null);
+    }
+
+    private boolean isReusablePendingAttempt(PaymentAttemptEntity attempt) {
+        return attempt != null
+                && attempt.getGatewayOrderId() != null
+                && !attempt.getGatewayOrderId().isBlank()
+                && (attempt.getAttemptStatus() == PaymentAttemptStatus.PENDING
+                || attempt.getAttemptStatus() == PaymentAttemptStatus.INITIATED);
     }
 
     private String defaultReason(String reason, OrderLifecycleStatus status) {

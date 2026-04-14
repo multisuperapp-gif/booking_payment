@@ -80,6 +80,16 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
         if (payment.getPaymentStatus() == PaymentLifecycleStatus.SUCCESS) {
             throw new BadRequestException("Payment is already completed for this booking.");
         }
+        PaymentAttemptEntity latestAttempt = paymentAttemptRepository
+                .findTopByPaymentIdAndGatewayNameOrderByIdDesc(payment.getId(), "RAZORPAY")
+                .orElse(null);
+        if (isReusablePendingAttempt(latestAttempt)) {
+            payment.setPaymentStatus(PaymentLifecycleStatus.PENDING);
+            paymentRepository.save(payment);
+            booking.setPaymentStatus(PayablePaymentStatus.PENDING);
+            bookingRepository.save(booking);
+            return toData(booking, payment, latestAttempt.getGatewayOrderId(), razorpayGatewayService.configuredKeyId(), amountInPaise(payment.getAmount()));
+        }
         RazorpayGatewayService.RazorpayOrderData gatewayOrder = razorpayGatewayService.createOrder(
                 payment.getPaymentCode(),
                 payment.getAmount(),
@@ -119,6 +129,16 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
     public BookingPaymentData markSuccess(CompleteBookingPaymentRequest request) {
         BookingEntity booking = loadBooking(request.bookingId());
         PaymentEntity payment = loadPaymentForBooking(request.paymentCode(), booking.getId());
+        if (payment.getPaymentStatus() == PaymentLifecycleStatus.SUCCESS
+                || payment.getPaymentStatus() == PaymentLifecycleStatus.REFUNDED) {
+            return toData(booking, payment, request.razorpayOrderId(), null, amountInPaise(payment.getAmount()));
+        }
+        if (booking.getBookingStatus() == BookingLifecycleStatus.CANCELLED
+                || payment.getPaymentStatus() == PaymentLifecycleStatus.FAILED
+                || booking.getPaymentStatus() == PayablePaymentStatus.FAILED
+                || booking.getPaymentStatus() == PayablePaymentStatus.REFUNDED) {
+            return toData(booking, payment, request.razorpayOrderId(), null, amountInPaise(payment.getAmount()));
+        }
         PaymentAttemptEntity attempt = paymentAttemptRepository.findFirstByGatewayOrderIdOrderByAttemptedAtDesc(request.razorpayOrderId())
                 .orElseThrow(() -> new BadRequestException("Razorpay payment attempt not found."));
         if (!attempt.getPaymentId().equals(payment.getId())) {
@@ -189,6 +209,16 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
     public BookingPaymentData markFailure(CompleteBookingPaymentRequest request) {
         BookingEntity booking = loadBooking(request.bookingId());
         PaymentEntity payment = loadPaymentForBooking(request.paymentCode(), booking.getId());
+        if (payment.getPaymentStatus() == PaymentLifecycleStatus.FAILED
+                && booking.getBookingStatus() == BookingLifecycleStatus.CANCELLED) {
+            return toData(booking, payment, request.razorpayOrderId(), null, amountInPaise(payment.getAmount()));
+        }
+        if (payment.getPaymentStatus() == PaymentLifecycleStatus.SUCCESS
+                || payment.getPaymentStatus() == PaymentLifecycleStatus.REFUNDED
+                || booking.getPaymentStatus() == PayablePaymentStatus.PAID
+                || booking.getPaymentStatus() == PayablePaymentStatus.REFUNDED) {
+            return toData(booking, payment, request.razorpayOrderId(), null, amountInPaise(payment.getAmount()));
+        }
         PaymentAttemptEntity attempt = paymentAttemptRepository.findFirstByGatewayOrderIdOrderByAttemptedAtDesc(request.razorpayOrderId())
                 .orElseThrow(() -> new BadRequestException("Razorpay payment attempt not found."));
         if (!attempt.getPaymentId().equals(payment.getId())) {
@@ -263,6 +293,14 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
         if (booking.getProviderEntityType().name().equals("SERVICE_PROVIDER")) {
             bookingSupportRepository.incrementAvailableServiceMen(booking.getProviderEntityId());
         }
+    }
+
+    private boolean isReusablePendingAttempt(PaymentAttemptEntity attempt) {
+        return attempt != null
+                && attempt.getGatewayOrderId() != null
+                && !attempt.getGatewayOrderId().isBlank()
+                && (attempt.getAttemptStatus() == PaymentAttemptStatus.PENDING
+                || attempt.getAttemptStatus() == PaymentAttemptStatus.INITIATED);
     }
 
     private BookingPaymentData toData(

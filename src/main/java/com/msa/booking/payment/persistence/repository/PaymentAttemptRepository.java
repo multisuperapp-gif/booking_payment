@@ -1,15 +1,15 @@
 package com.msa.booking.payment.persistence.repository;
 
 import com.msa.booking.payment.persistence.entity.PaymentAttemptEntity;
+import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 
-import java.util.List;
-import java.util.Optional;
-
 public interface PaymentAttemptRepository extends JpaRepository<PaymentAttemptEntity, Long> {
-    List<PaymentAttemptEntity> findByPaymentIdOrderByAttemptedAtDesc(Long paymentId);
+    Optional<PaymentAttemptEntity> findTopByPaymentIdOrderByIdDesc(Long paymentId);
 
-    Optional<PaymentAttemptEntity> findFirstByPaymentIdOrderByAttemptedAtDesc(Long paymentId);
+    Optional<PaymentAttemptEntity> findTopByPaymentIdAndGatewayNameOrderByIdDesc(Long paymentId, String gatewayName);
+
+    Optional<PaymentAttemptEntity> findTopByGatewayOrderIdOrderByIdDesc(String gatewayOrderId);
 
     Optional<PaymentAttemptEntity> findFirstByGatewayOrderIdOrderByAttemptedAtDesc(String gatewayOrderId);
 }

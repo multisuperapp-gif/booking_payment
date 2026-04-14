@@ -1,11 +1,13 @@
 package com.msa.booking.payment.order.controller;
 
 import com.msa.booking.payment.common.api.ApiResponse;
+import com.msa.booking.payment.common.exception.BadRequestException;
 import com.msa.booking.payment.order.dto.*;
 import com.msa.booking.payment.order.service.ShopOrderService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -44,7 +46,13 @@ public class ShopOrderController {
     }
 
     @PostMapping("/cancel")
-    public ApiResponse<ShopOrderData> cancelByUser(@Valid @RequestBody CancelShopOrderRequest request) {
+    public ApiResponse<ShopOrderData> cancelByUser(
+            @RequestHeader("X-User-Id") Long userId,
+            @Valid @RequestBody CancelShopOrderRequest request
+    ) {
+        if (!userId.equals(request.userId())) {
+            throw new BadRequestException("Authenticated user does not match cancellation user");
+        }
         return ApiResponse.success("Shop order cancelled successfully", shopOrderService.cancelByUser(request));
     }
 }

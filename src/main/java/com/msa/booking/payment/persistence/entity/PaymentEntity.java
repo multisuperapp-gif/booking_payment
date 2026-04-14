@@ -10,13 +10,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(
-        name = "payments",
-        indexes = {
-                @Index(name = "idx_payments_payable", columnList = "payable_type, payable_id"),
-                @Index(name = "idx_payments_payer_status", columnList = "payer_user_id, payment_status")
-        }
-)
+@Table(name = "payments")
 @Getter
 @Setter
 public class PaymentEntity {
@@ -24,7 +18,7 @@ public class PaymentEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "payment_code", nullable = false, length = 32, unique = true)
+    @Column(name = "payment_code", nullable = false, unique = true, length = 32)
     private String paymentCode;
 
     @Enumerated(EnumType.STRING)
@@ -41,7 +35,7 @@ public class PaymentEntity {
     @Column(name = "payment_status", nullable = false, length = 30)
     private PaymentLifecycleStatus paymentStatus;
 
-    @Column(name = "amount", nullable = false, precision = 12, scale = 2)
+    @Column(nullable = false)
     private BigDecimal amount;
 
     @Column(name = "currency_code", nullable = false, length = 3)
@@ -52,4 +46,5 @@ public class PaymentEntity {
 
     @Column(name = "completed_at")
     private LocalDateTime completedAt;
+
 }

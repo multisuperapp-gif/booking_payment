@@ -15,8 +15,10 @@ import java.time.LocalDateTime;
 @Table(
         name = "bookings",
         indexes = {
+                @Index(name = "idx_bookings_booking_request_id", columnList = "booking_request_id"),
                 @Index(name = "idx_bookings_user_status_created", columnList = "user_id, booking_status, created_at"),
-                @Index(name = "idx_bookings_provider_status_start", columnList = "provider_entity_type, provider_entity_id, booking_status, scheduled_start_at")
+                @Index(name = "idx_bookings_provider_status_start", columnList = "provider_entity_type, provider_entity_id, booking_status, scheduled_start_at"),
+                @Index(name = "idx_bookings_address_id", columnList = "address_id")
         }
 )
 @Getter
@@ -29,7 +31,7 @@ public class BookingEntity {
     @Column(name = "booking_request_id")
     private Long bookingRequestId;
 
-    @Column(name = "booking_code", nullable = false, length = 32, unique = true)
+    @Column(name = "booking_code", nullable = false, unique = true, length = 32)
     private String bookingCode;
 
     @Enumerated(EnumType.STRING)
@@ -86,7 +88,4 @@ public class BookingEntity {
 
     @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
     private LocalDateTime createdAt;
-
-    @Column(name = "updated_at", nullable = false, insertable = false, updatable = false)
-    private LocalDateTime updatedAt;
 }

@@ -1,0 +1,276 @@
+package com.msa.booking.payment.modules.settlement.service;
+
+import com.msa.booking.payment.common.exception.ResourceNotFoundException;
+import com.msa.booking.payment.domain.enums.PayableType;
+import com.msa.booking.payment.domain.enums.ProviderEntityType;
+import com.msa.booking.payment.persistence.entity.BookingEntity;
+import com.msa.booking.payment.persistence.entity.OrderEntity;
+import com.msa.booking.payment.persistence.entity.PaymentEntity;
+import com.msa.booking.payment.persistence.entity.SettlementCycleEntity;
+import com.msa.booking.payment.persistence.entity.SettlementEntity;
+import com.msa.booking.payment.persistence.entity.SettlementLineItemEntity;
+import com.msa.booking.payment.persistence.repository.BookingRepository;
+import com.msa.booking.payment.persistence.repository.OrderRepository;
+import com.msa.booking.payment.persistence.repository.SettlementCycleRepository;
+import com.msa.booking.payment.persistence.repository.SettlementLineItemRepository;
+import com.msa.booking.payment.persistence.repository.SettlementRepository;
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.UUID;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+@Service
+public class SettlementLifecycleService {
+    private static final String DAILY = "DAILY";
+    private static final String OPEN = "OPEN";
+    private static final String PENDING = "PENDING";
+    private static final String SOURCE_ORDER = "ORDER";
+    private static final String SOURCE_BOOKING = "BOOKING";
+    private static final String LINE_GROSS = "GROSS";
+    private static final String LINE_COMMISSION = "COMMISSION";
+    private static final String LINE_REFUND = "REFUND";
+    private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(2);
+
+    private final SettlementCycleRepository settlementCycleRepository;
+    private final SettlementRepository settlementRepository;
+    private final SettlementLineItemRepository settlementLineItemRepository;
+    private final OrderRepository orderRepository;
+    private final BookingRepository bookingRepository;
+
+    public SettlementLifecycleService(
+            SettlementCycleRepository settlementCycleRepository,
+            SettlementRepository settlementRepository,
+            SettlementLineItemRepository settlementLineItemRepository,
+            OrderRepository orderRepository,
+            BookingRepository bookingRepository
+    ) {
+        this.settlementCycleRepository = settlementCycleRepository;
+        this.settlementRepository = settlementRepository;
+        this.settlementLineItemRepository = settlementLineItemRepository;
+        this.orderRepository = orderRepository;
+        this.bookingRepository = bookingRepository;
+    }
+
+    @Transactional
+    public void recordSuccessfulPayment(PaymentEntity payment) {
+        if (payment.getPayableType() == PayableType.ORDER) {
+            recordOrderSettlement(payment);
+            return;
+        }
+        if (payment.getPayableType() == PayableType.BOOKING) {
+            recordBookingSettlement(payment);
+        }
+    }
+
+    @Transactional
+    public void recordSuccessfulRefund(PaymentEntity payment, BigDecimal refundAmount) {
+        if (refundAmount == null || refundAmount.signum() <= 0) {
+            return;
+        }
+        if (payment.getPayableType() == PayableType.ORDER) {
+            recordOrderRefund(payment, refundAmount);
+            return;
+        }
+        if (payment.getPayableType() == PayableType.BOOKING) {
+            recordBookingRefund(payment, refundAmount);
+        }
+    }
+
+    private void recordOrderSettlement(PaymentEntity payment) {
+        Long orderId = payment.getPayableId();
+        if (settlementLineItemRepository.existsBySourceTypeAndSourceIdAndLineType(SOURCE_ORDER, orderId, LINE_GROSS)) {
+            return;
+        }
+
+        OrderEntity order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new ResourceNotFoundException("Linked order not found"));
+        SettlementCycleEntity cycle = resolveDailyCycle(payment.getCompletedAt());
+        SettlementEntity settlement = resolveSettlement(cycle.getId(), "SHOP", order.getShopId());
+
+        BigDecimal gross = amountOrFallback(order.getTotalAmount(), payment.getAmount());
+        BigDecimal commission = amountOrZero(order.getPlatformFeeAmount());
+
+        appendAmounts(settlement, gross, commission);
+        settlementRepository.save(settlement);
+
+        saveLineItem(settlement.getId(), SOURCE_ORDER, orderId, LINE_GROSS, gross, order.getOrderCode());
+        if (commission.signum() > 0) {
+            saveLineItem(settlement.getId(), SOURCE_ORDER, orderId, LINE_COMMISSION, commission.negate(), order.getOrderCode());
+        }
+    }
+
+    private void recordBookingSettlement(PaymentEntity payment) {
+        Long bookingId = payment.getPayableId();
+        if (settlementLineItemRepository.existsBySourceTypeAndSourceIdAndLineType(SOURCE_BOOKING, bookingId, LINE_GROSS)) {
+            return;
+        }
+
+        BookingEntity booking = bookingRepository.findById(bookingId)
+                .orElseThrow(() -> new ResourceNotFoundException("Linked booking not found"));
+        SettlementCycleEntity cycle = resolveDailyCycle(payment.getCompletedAt());
+        SettlementEntity settlement = resolveSettlement(
+                cycle.getId(),
+                resolveBookingBeneficiaryType(booking.getProviderEntityType()),
+                booking.getProviderEntityId()
+        );
+
+        BigDecimal gross = resolveBookingGrossAmount(booking, payment);
+        BigDecimal commission = amountOrZero(booking.getPlatformFeeAmount());
+
+        appendAmounts(settlement, gross, commission);
+        settlementRepository.save(settlement);
+
+        saveLineItem(settlement.getId(), SOURCE_BOOKING, bookingId, LINE_GROSS, gross, booking.getBookingCode());
+        if (commission.signum() > 0) {
+            saveLineItem(settlement.getId(), SOURCE_BOOKING, bookingId, LINE_COMMISSION, commission.negate(), booking.getBookingCode());
+        }
+    }
+
+    private void recordOrderRefund(PaymentEntity payment, BigDecimal refundAmount) {
+        Long orderId = payment.getPayableId();
+        if (settlementLineItemRepository.existsBySourceTypeAndSourceIdAndLineType(SOURCE_ORDER, orderId, LINE_REFUND)) {
+            return;
+        }
+        OrderEntity order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new ResourceNotFoundException("Linked order not found"));
+        SettlementEntity settlement = resolveSettlementForRefund(
+                SOURCE_ORDER,
+                orderId,
+                payment.getCompletedAt(),
+                "SHOP",
+                order.getShopId()
+        );
+        appendRefund(settlement, refundAmount);
+        settlementRepository.save(settlement);
+        saveLineItem(settlement.getId(), SOURCE_ORDER, orderId, LINE_REFUND, refundAmount.negate(), order.getOrderCode());
+    }
+
+    private void recordBookingRefund(PaymentEntity payment, BigDecimal refundAmount) {
+        Long bookingId = payment.getPayableId();
+        if (settlementLineItemRepository.existsBySourceTypeAndSourceIdAndLineType(SOURCE_BOOKING, bookingId, LINE_REFUND)) {
+            return;
+        }
+        BookingEntity booking = bookingRepository.findById(bookingId)
+                .orElseThrow(() -> new ResourceNotFoundException("Linked booking not found"));
+        SettlementEntity settlement = resolveSettlementForRefund(
+                SOURCE_BOOKING,
+                bookingId,
+                payment.getCompletedAt(),
+                resolveBookingBeneficiaryType(booking.getProviderEntityType()),
+                booking.getProviderEntityId()
+        );
+        appendRefund(settlement, refundAmount);
+        settlementRepository.save(settlement);
+        saveLineItem(settlement.getId(), SOURCE_BOOKING, bookingId, LINE_REFUND, refundAmount.negate(), booking.getBookingCode());
+    }
+
+    private SettlementCycleEntity resolveDailyCycle(LocalDateTime completedAt) {
+        LocalDate cycleDate = (completedAt == null ? LocalDate.now() : completedAt.toLocalDate());
+        return settlementCycleRepository.findByCycleTypeAndPeriodStartAndPeriodEnd(DAILY, cycleDate, cycleDate)
+                .orElseGet(() -> {
+                    SettlementCycleEntity cycle = new SettlementCycleEntity();
+                    cycle.setCycleType(DAILY);
+                    cycle.setPeriodStart(cycleDate);
+                    cycle.setPeriodEnd(cycleDate);
+                    cycle.setStatus(OPEN);
+                    return settlementCycleRepository.save(cycle);
+                });
+    }
+
+    private SettlementEntity resolveSettlement(Long cycleId, String beneficiaryType, Long beneficiaryId) {
+        return settlementRepository.findBySettlementCycleIdAndBeneficiaryTypeAndBeneficiaryId(
+                cycleId,
+                beneficiaryType,
+                beneficiaryId
+        ).orElseGet(() -> {
+            SettlementEntity settlement = new SettlementEntity();
+            settlement.setSettlementCode(generateSettlementCode());
+            settlement.setSettlementCycleId(cycleId);
+            settlement.setBeneficiaryType(beneficiaryType);
+            settlement.setBeneficiaryId(beneficiaryId);
+            settlement.setGrossAmount(ZERO);
+            settlement.setCommissionAmount(ZERO);
+            settlement.setTaxAmount(ZERO);
+            settlement.setAdjustmentAmount(ZERO);
+            settlement.setRefundDeductionAmount(ZERO);
+            settlement.setNetAmount(ZERO);
+            settlement.setStatus(PENDING);
+            return settlementRepository.save(settlement);
+        });
+    }
+
+    private void appendAmounts(SettlementEntity settlement, BigDecimal gross, BigDecimal commission) {
+        settlement.setGrossAmount(amountOrZero(settlement.getGrossAmount()).add(gross));
+        settlement.setCommissionAmount(amountOrZero(settlement.getCommissionAmount()).add(commission));
+        settlement.setNetAmount(amountOrZero(settlement.getNetAmount()).add(gross.subtract(commission)));
+    }
+
+    private void appendRefund(SettlementEntity settlement, BigDecimal refundAmount) {
+        settlement.setRefundDeductionAmount(amountOrZero(settlement.getRefundDeductionAmount()).add(refundAmount));
+        settlement.setNetAmount(amountOrZero(settlement.getNetAmount()).subtract(refundAmount));
+    }
+
+    private SettlementEntity resolveSettlementForRefund(
+            String sourceType,
+            Long sourceId,
+            LocalDateTime completedAt,
+            String beneficiaryType,
+            Long beneficiaryId
+    ) {
+        return settlementLineItemRepository.findTopBySourceTypeAndSourceIdAndLineTypeOrderByIdAsc(sourceType, sourceId, LINE_GROSS)
+                .flatMap(lineItem -> settlementRepository.findById(lineItem.getSettlementId()))
+                .orElseGet(() -> {
+                    SettlementCycleEntity cycle = resolveDailyCycle(completedAt);
+                    return resolveSettlement(cycle.getId(), beneficiaryType, beneficiaryId);
+                });
+    }
+
+    private void saveLineItem(
+            Long settlementId,
+            String sourceType,
+            Long sourceId,
+            String lineType,
+            BigDecimal amount,
+            String sourceCode
+    ) {
+        SettlementLineItemEntity lineItem = new SettlementLineItemEntity();
+        lineItem.setSettlementId(settlementId);
+        lineItem.setSourceType(sourceType);
+        lineItem.setSourceId(sourceId);
+        lineItem.setLineType(lineType);
+        lineItem.setAmount(amount);
+        lineItem.setRemarks(sourceCode);
+        settlementLineItemRepository.save(lineItem);
+    }
+
+    private String resolveBookingBeneficiaryType(ProviderEntityType providerEntityType) {
+        return providerEntityType == ProviderEntityType.LABOUR ? "LABOUR" : "PROVIDER";
+    }
+
+    private BigDecimal resolveBookingGrossAmount(BookingEntity booking, PaymentEntity payment) {
+        return amountOrFallback(
+                booking.getTotalFinalAmount(),
+                amountOrFallback(booking.getTotalEstimatedAmount(), payment.getAmount())
+        );
+    }
+
+    private BigDecimal amountOrFallback(BigDecimal preferred, BigDecimal fallback) {
+        if (preferred != null) {
+            return preferred.setScale(2);
+        }
+        return amountOrZero(fallback);
+    }
+
+    private BigDecimal amountOrZero(BigDecimal amount) {
+        if (amount == null) {
+            return ZERO;
+        }
+        return amount.setScale(2);
+    }
+
+    private String generateSettlementCode() {
+        return "SET-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase();
+    }
+}
