@@ -39,7 +39,7 @@ app:
     order-cancel-max-requests: ${RATE_LIMIT_ORDER_CANCEL_MAX_REQUESTS:12}
   firebase:
     enabled: ${FIREBASE_ENABLED:true}
-    service-account-path: ${FIREBASE_SERVICE_ACCOUNT_PATH:/Users/rajnishsingh/Documents/MultiSuperAppProjects/secret/multisuperapp-e1fcb-firebase-adminsdk-fbsvc-96e74b9104.json}
+    service-account-path: ${FIREBASE_SERVICE_ACCOUNT_PATH:/opt/app/secrets/firebase.json}
   razorpay:
     enabled: ${RAZORPAY_ENABLED:false}
     key-id: ${RAZORPAY_KEY_ID:}
