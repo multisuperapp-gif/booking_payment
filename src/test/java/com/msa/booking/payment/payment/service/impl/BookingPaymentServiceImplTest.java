@@ -41,6 +41,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -138,6 +139,29 @@ class BookingPaymentServiceImplTest {
     }
 
     @Test
+    void initiateReusesPendingGatewayAttemptWithoutCreatingNewOrder() {
+        BookingEntity booking = serviceBooking();
+        PaymentEntity payment = pendingBookingPayment();
+        PaymentAttemptEntity attempt = paymentAttempt(payment.getId(), "order_reuse");
+        attempt.setAttemptStatus(PaymentAttemptStatus.PENDING);
+
+        when(bookingRepository.findById(10L)).thenReturn(Optional.of(booking));
+        when(paymentRepository.findByPayableTypeAndPayableId(PayableType.BOOKING, 10L)).thenReturn(Optional.of(payment));
+        when(paymentAttemptRepository.findTopByPaymentIdAndGatewayNameOrderByIdDesc(500L, "RAZORPAY"))
+                .thenReturn(Optional.of(attempt));
+        when(razorpayGatewayService.configuredKeyId()).thenReturn("rzp_live_reuse");
+
+        var response = service.initiate(new InitiateBookingPaymentRequest(10L));
+
+        assertEquals("order_reuse", response.razorpayOrderId());
+        assertEquals("rzp_live_reuse", response.razorpayKeyId());
+        assertEquals(PaymentLifecycleStatus.PENDING, response.paymentLifecycleStatus());
+        verify(razorpayGatewayService, never()).createOrder(any(), any(), any());
+        verify(paymentAttemptRepository, never()).save(any(PaymentAttemptEntity.class));
+        verify(notificationService, never()).notifyUser(eq(77L), eq("BOOKING_PAYMENT_PENDING"), any(), any(), any(Map.class));
+    }
+
+    @Test
     void markSuccessCompletesPaymentAndNotifiesUserAndProvider() {
         BookingEntity booking = serviceBooking();
         PaymentEntity payment = pendingBookingPayment();
@@ -223,6 +247,60 @@ class BookingPaymentServiceImplTest {
                 eq(77L),
                 eq("Payment failed")
         );
+    }
+
+    @Test
+    void markSuccessIgnoresLateSuccessForCancelledBooking() {
+        BookingEntity booking = serviceBooking();
+        booking.setBookingStatus(BookingLifecycleStatus.CANCELLED);
+        booking.setPaymentStatus(PayablePaymentStatus.FAILED);
+        PaymentEntity payment = pendingBookingPayment();
+        payment.setPaymentStatus(PaymentLifecycleStatus.FAILED);
+
+        when(bookingRepository.findById(10L)).thenReturn(Optional.of(booking));
+        when(paymentRepository.findByPaymentCode("PAY-BOOKING")).thenReturn(Optional.of(payment));
+
+        var response = service.markSuccess(new CompleteBookingPaymentRequest(
+                10L,
+                "PAY-BOOKING",
+                "order_late_success",
+                "pay_late_success",
+                "sig_late_success",
+                null,
+                null
+        ));
+
+        assertEquals(BookingLifecycleStatus.CANCELLED, response.bookingStatus());
+        assertEquals(PayablePaymentStatus.FAILED, response.payablePaymentStatus());
+        verify(paymentAttemptRepository, never()).findFirstByGatewayOrderIdOrderByAttemptedAtDesc(any());
+        verify(paymentTransactionRepository, never()).findByGatewayTransactionId(any());
+    }
+
+    @Test
+    void markFailureIgnoresLateFailureForPaidBooking() {
+        BookingEntity booking = serviceBooking();
+        booking.setBookingStatus(BookingLifecycleStatus.PAYMENT_COMPLETED);
+        booking.setPaymentStatus(PayablePaymentStatus.PAID);
+        PaymentEntity payment = pendingBookingPayment();
+        payment.setPaymentStatus(PaymentLifecycleStatus.SUCCESS);
+
+        when(bookingRepository.findById(10L)).thenReturn(Optional.of(booking));
+        when(paymentRepository.findByPaymentCode("PAY-BOOKING")).thenReturn(Optional.of(payment));
+
+        var response = service.markFailure(new CompleteBookingPaymentRequest(
+                10L,
+                "PAY-BOOKING",
+                "order_late_failure",
+                null,
+                null,
+                "payment_failed",
+                "late failure"
+        ));
+
+        assertEquals(BookingLifecycleStatus.PAYMENT_COMPLETED, response.bookingStatus());
+        assertEquals(PayablePaymentStatus.PAID, response.payablePaymentStatus());
+        verify(paymentAttemptRepository, never()).findFirstByGatewayOrderIdOrderByAttemptedAtDesc(any());
+        verify(bookingSupportRepository, never()).incrementAvailableServiceMen(any());
     }
 
     @Test

@@ -10,6 +10,7 @@ import com.msa.booking.payment.domain.enums.PayableType;
 import com.msa.booking.payment.domain.enums.PaymentAttemptStatus;
 import com.msa.booking.payment.domain.enums.PaymentLifecycleStatus;
 import com.msa.booking.payment.domain.enums.ProviderEntityType;
+import com.msa.booking.payment.modules.payment.service.PaymentWebhookEventService;
 import com.msa.booking.payment.notification.service.NotificationService;
 import com.msa.booking.payment.payment.service.RazorpayGatewayService;
 import com.msa.booking.payment.persistence.entity.BookingEntity;
@@ -73,6 +74,8 @@ class RazorpayWebhookServiceImplTest {
     private BookingHistoryService bookingHistoryService;
     @Mock
     private NotificationService notificationService;
+    @Mock
+    private PaymentWebhookEventService paymentWebhookEventService;
 
     private RazorpayWebhookServiceImpl service;
 
@@ -90,13 +93,16 @@ class RazorpayWebhookServiceImplTest {
                 bookingSupportRepository,
                 shopOrderSupportRepository,
                 bookingHistoryService,
-                notificationService
+                notificationService,
+                paymentWebhookEventService
         );
 
         when(paymentRepository.save(any(PaymentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(paymentAttemptRepository.save(any(PaymentAttemptEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(bookingRepository.save(any(BookingEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(orderRepository.save(any(OrderEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(paymentWebhookEventService.resolveWebhookKey(any(), any())).thenReturn("webhook_key");
+        when(paymentWebhookEventService.registerIfFirst(any(), any(), any(), any(), any(), any())).thenReturn(true);
     }
 
     @Test
@@ -124,7 +130,7 @@ class RazorpayWebhookServiceImplTest {
         when(paymentTransactionRepository.findByGatewayTransactionId("pay_webhook_1")).thenReturn(Optional.empty());
         when(bookingRepository.findById(10L)).thenReturn(Optional.of(booking));
 
-        service.processWebhook(body, "valid_signature");
+        service.processWebhook(body, "valid_signature", "evt_1");
 
         assertEquals(PaymentLifecycleStatus.SUCCESS, payment.getPaymentStatus());
         assertEquals(PaymentAttemptStatus.SUCCESS, attempt.getAttemptStatus());
@@ -176,7 +182,7 @@ class RazorpayWebhookServiceImplTest {
         when(orderRepository.findById(21L)).thenReturn(Optional.of(order));
         when(orderItemRepository.findByOrderId(21L)).thenReturn(List.of(item));
 
-        service.processWebhook(body, "valid_signature");
+        service.processWebhook(body, "valid_signature", "evt_2");
 
         assertEquals(PaymentLifecycleStatus.FAILED, payment.getPaymentStatus());
         assertEquals(OrderLifecycleStatus.CANCELLED, order.getOrderStatus());
@@ -192,16 +198,117 @@ class RazorpayWebhookServiceImplTest {
     }
 
     @Test
+    void processWebhookIgnoresLateFailureForPaidOrder() {
+        String body = """
+                {
+                  "event": "payment.failed",
+                  "payload": {
+                    "payment": {
+                      "entity": {
+                        "id": "pay_webhook_fail_late",
+                        "order_id": "order_webhook_paid",
+                        "error_code": "BAD_CARD"
+                      }
+                    }
+                  }
+                }
+                """;
+        PaymentAttemptEntity attempt = paymentAttempt(901L, "order_webhook_paid");
+        PaymentEntity payment = orderPayment(901L, 21L);
+        payment.setPaymentStatus(PaymentLifecycleStatus.SUCCESS);
+        OrderEntity order = order();
+        order.setOrderStatus(OrderLifecycleStatus.PAYMENT_COMPLETED);
+        order.setPaymentStatus(PayablePaymentStatus.PAID);
+
+        when(razorpayGatewayService.verifyWebhookSignature(body, "valid_signature")).thenReturn(true);
+        when(paymentAttemptRepository.findFirstByGatewayOrderIdOrderByAttemptedAtDesc("order_webhook_paid")).thenReturn(Optional.of(attempt));
+        when(paymentRepository.findById(901L)).thenReturn(Optional.of(payment));
+        when(orderRepository.findById(21L)).thenReturn(Optional.of(order));
+
+        service.processWebhook(body, "valid_signature", "evt_3");
+
+        assertEquals(PaymentLifecycleStatus.SUCCESS, payment.getPaymentStatus());
+        assertEquals(OrderLifecycleStatus.PAYMENT_COMPLETED, order.getOrderStatus());
+        verify(shopOrderSupportRepository, never()).releaseReservedInventory(any(), any());
+        verify(bookingHistoryService, never()).recordOrderStatus(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void processWebhookIgnoresLateSuccessForCancelledOrder() {
+        String body = """
+                {
+                  "event": "payment.captured",
+                  "payload": {
+                    "payment": {
+                      "entity": {
+                        "id": "pay_webhook_late_success",
+                        "order_id": "order_webhook_cancelled"
+                      }
+                    }
+                  }
+                }
+                """;
+        PaymentAttemptEntity attempt = paymentAttempt(901L, "order_webhook_cancelled");
+        PaymentEntity payment = orderPayment(901L, 21L);
+        payment.setPaymentStatus(PaymentLifecycleStatus.FAILED);
+        OrderEntity order = order();
+        order.setOrderStatus(OrderLifecycleStatus.CANCELLED);
+        order.setPaymentStatus(PayablePaymentStatus.FAILED);
+
+        when(razorpayGatewayService.verifyWebhookSignature(body, "valid_signature")).thenReturn(true);
+        when(paymentAttemptRepository.findFirstByGatewayOrderIdOrderByAttemptedAtDesc("order_webhook_cancelled")).thenReturn(Optional.of(attempt));
+        when(paymentRepository.findById(901L)).thenReturn(Optional.of(payment));
+        when(orderRepository.findById(21L)).thenReturn(Optional.of(order));
+
+        service.processWebhook(body, "valid_signature", "evt_4");
+
+        assertEquals(PaymentLifecycleStatus.FAILED, payment.getPaymentStatus());
+        assertEquals(OrderLifecycleStatus.CANCELLED, order.getOrderStatus());
+        verify(paymentTransactionRepository, never()).save(any());
+        verify(shopOrderSupportRepository, never()).consumeReservedInventory(any(), any());
+        verify(bookingHistoryService, never()).recordOrderStatus(any(), any(), any(), any(), any());
+    }
+
+    @Test
     void processWebhookRejectsInvalidSignature() {
         when(razorpayGatewayService.verifyWebhookSignature("{}", "bad_signature")).thenReturn(false);
 
         BadRequestException exception = assertThrows(
                 BadRequestException.class,
-                () -> service.processWebhook("{}", "bad_signature")
+                () -> service.processWebhook("{}", "bad_signature", "evt_bad")
         );
 
         assertEquals("Invalid Razorpay webhook signature.", exception.getMessage());
         verify(paymentAttemptRepository, never()).findFirstByGatewayOrderIdOrderByAttemptedAtDesc(any());
+    }
+
+    @Test
+    void processWebhookIgnoresDuplicateEventBeforeStateMutation() {
+        String body = """
+                {
+                  "event": "payment.captured",
+                  "payload": {
+                    "payment": {
+                      "entity": {
+                        "id": "pay_webhook_dup",
+                        "order_id": "order_webhook_dup"
+                      }
+                    }
+                  }
+                }
+                """;
+        PaymentAttemptEntity attempt = paymentAttempt(900L, "order_webhook_dup");
+        PaymentEntity payment = bookingPayment(900L, 10L);
+
+        when(razorpayGatewayService.verifyWebhookSignature(body, "valid_signature")).thenReturn(true);
+        when(paymentAttemptRepository.findFirstByGatewayOrderIdOrderByAttemptedAtDesc("order_webhook_dup")).thenReturn(Optional.of(attempt));
+        when(paymentRepository.findById(900L)).thenReturn(Optional.of(payment));
+        when(paymentWebhookEventService.registerIfFirst(any(), any(), any(), any(), any(), any())).thenReturn(false);
+
+        service.processWebhook(body, "valid_signature", "evt_dup");
+
+        verify(paymentTransactionRepository, never()).save(any());
+        verify(notificationService, never()).notifyUser(any(), any(), any(), any(), any(Map.class));
     }
 
     private PaymentAttemptEntity paymentAttempt(Long paymentId, String orderId) {

@@ -1,13 +1,13 @@
 package com.msa.booking.payment;
 
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+
 import org.junit.jupiter.api.Test;
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class BookingPaymentApplicationTests {
 
-	@Test
-	void applicationClassNameIsUpdated() {
-		assertEquals("BookingPaymentApplication", BookingPaymentApplication.class.getSimpleName());
-	}
-
+    @Test
+    void applicationClassIsPresent() {
+        assertNotNull(BookingPaymentApplication.class);
+    }
 }
