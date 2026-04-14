@@ -42,9 +42,9 @@ app:
     service-account-path: ${FIREBASE_SERVICE_ACCOUNT_PATH:/opt/app/secrets/firebase.json}
   razorpay:
     enabled: ${RAZORPAY_ENABLED:false}
-    key-id: ${RAZORPAY_KEY_ID:}
-    key-secret: ${RAZORPAY_KEY_SECRET:}
-    webhook-secret: ${RAZORPAY_WEBHOOK_SECRET:mock-webhook-secret}
+    key-id: ${RAZORPAY_KEY_ID}
+    key-secret: ${RAZORPAY_KEY_SECRET}
+    webhook-secret: ${RAZORPAY_WEBHOOK_SECRET}
 
 management:
   endpoints:
