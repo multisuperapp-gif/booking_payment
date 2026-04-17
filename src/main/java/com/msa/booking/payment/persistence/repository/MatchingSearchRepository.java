@@ -6,7 +6,6 @@ import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 import java.util.List;
 
 public interface MatchingSearchRepository extends Repository<BookingRequestEntity, Long> {
@@ -41,13 +40,6 @@ public interface MatchingSearchRepository extends Repository<BookingRequestEntit
                 WHERE ls.labour_id = lp.id
                   AND ls.category_id = :categoryId
               )
-              AND EXISTS (
-                SELECT 1
-                FROM labour_availability la
-                WHERE la.labour_id = lp.id
-                  AND la.available_date = DATE(:scheduledStartAt)
-                  AND la.availability_status = 'AVAILABLE'
-              )
               AND NOT EXISTS (
                 SELECT 1
                 FROM bookings b
@@ -69,7 +61,6 @@ public interface MatchingSearchRepository extends Repository<BookingRequestEntit
     List<LabourCandidateProjection> findEligibleLabourCandidates(
             @Param("categoryId") Long categoryId,
             @Param("pricingModel") String pricingModel,
-            @Param("scheduledStartAt") LocalDateTime scheduledStartAt,
             @Param("latitude") BigDecimal latitude,
             @Param("longitude") BigDecimal longitude,
             @Param("priceMin") BigDecimal priceMin,

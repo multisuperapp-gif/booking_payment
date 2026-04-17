@@ -57,7 +57,6 @@ public class BookingCandidateMatchingServiceImpl implements BookingCandidateMatc
         List<LabourCandidateProjection> matches = matchingSearchRepository.findEligibleLabourCandidates(
                 request.categoryId(),
                 labourPricingModel,
-                request.scheduledStartAt(),
                 request.searchLatitude(),
                 request.searchLongitude(),
                 request.priceMinAmount(),
