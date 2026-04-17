@@ -2,13 +2,46 @@ package com.msa.booking.payment.payment.service.impl;
 
 import com.msa.booking.payment.common.exception.BadRequestException;
 import com.msa.booking.payment.config.RazorpayProperties;
+import com.msa.booking.payment.payment.service.RazorpayGatewayService;
+import com.razorpay.Order;
+import com.razorpay.OrderClient;
 import com.razorpay.RazorpayClient;
 import org.junit.jupiter.api.Test;
+import org.json.JSONObject;
+
+import java.math.BigDecimal;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class RazorpayGatewayServiceImplTest {
+
+    @Test
+    void createOrderHandlesStringStatusWithoutCharArrayCast() throws Exception {
+        RazorpayClient razorpayClient = mock(RazorpayClient.class);
+        OrderClient orderClient = mock(OrderClient.class);
+        razorpayClient.orders = orderClient;
+        Order order = mock(Order.class);
+        when(orderClient.create(org.mockito.ArgumentMatchers.any(JSONObject.class))).thenReturn(order);
+        when(order.get("id")).thenReturn("order_123");
+        when(order.get("currency")).thenReturn("INR");
+        when(order.get("amount")).thenReturn(2500L);
+        when(order.get("status")).thenReturn("created");
+
+        RazorpayGatewayServiceImpl service = new RazorpayGatewayServiceImpl(
+                razorpayClient,
+                properties("rzp_test_key", "test_secret", "webhook_secret")
+        );
+
+        RazorpayGatewayService.RazorpayOrderData result = service.createOrder("pay_001", BigDecimal.valueOf(25), "INR");
+
+        assertEquals("order_123", result.orderId());
+        assertEquals("INR", result.currency());
+        assertEquals(BigDecimal.valueOf(25.00).setScale(2), result.amount());
+        assertEquals(2500L, result.amountInPaise());
+        assertEquals("created", result.status());
+    }
 
     @Test
     void verifyPaymentSignatureReturnsTrueForExpectedSignature() {

@@ -13,6 +13,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
+import java.util.Objects;
 
 @Service
 public class RazorpayGatewayServiceImpl implements RazorpayGatewayService {
@@ -34,13 +35,17 @@ public class RazorpayGatewayServiceImpl implements RazorpayGatewayService {
             request.put("payment_capture", 1);
 
             Order order = razorpayClient.orders.create(request);
+            Object orderId = order.get("id");
+            Object orderCurrency = order.get("currency");
+            Object orderAmount = order.get("amount");
+            Object orderStatus = order.get("status");
             return new RazorpayOrderData(
                     razorpayProperties.getKeyId(),
-                    order.get("id"),
-                    order.get("currency"),
-                    fromPaise(order.get("amount")),
-                    ((Number) order.get("amount")).longValue(),
-                    String.valueOf(order.get("status"))
+                    Objects.toString(orderId, ""),
+                    Objects.toString(orderCurrency, currency),
+                    fromPaise(orderAmount),
+                    ((Number) orderAmount).longValue(),
+                    Objects.toString(orderStatus, "")
             );
         } catch (Exception exception) {
             throw new BadRequestException("Unable to create Razorpay order: " + exception.getMessage());
