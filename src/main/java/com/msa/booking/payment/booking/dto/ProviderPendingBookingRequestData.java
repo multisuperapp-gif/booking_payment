@@ -14,6 +14,8 @@ public record ProviderPendingBookingRequestData(
         Long providerEntityId,
         Long candidateId,
         String customerName,
+        String categoryLabel,
+        String labourPricingModel,
         BigDecimal quotedPriceAmount,
         BigDecimal distanceKm,
         LocalDateTime scheduledStartAt,

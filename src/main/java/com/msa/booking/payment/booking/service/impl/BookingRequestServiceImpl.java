@@ -71,6 +71,7 @@ public class BookingRequestServiceImpl implements BookingRequestService {
         entity.setTargetProviderEntityId(request.targetProviderEntityId());
         entity.setCategoryId(request.categoryId());
         entity.setSubcategoryId(request.subcategoryId());
+        entity.setLabourPricingModel(normalizeLabourPricingModel(request.labourPricingModel()));
         entity.setScheduledStartAt(request.scheduledStartAt());
         entity.setExpiresAt(expiresAt);
         entity.setPriceMinAmount(request.priceMinAmount());
@@ -142,6 +143,17 @@ public class BookingRequestServiceImpl implements BookingRequestService {
                 throw new BadRequestException("Service broadcast booking request requires category or subcategory.");
             }
         }
+    }
+
+    private String normalizeLabourPricingModel(String labourPricingModel) {
+        if (labourPricingModel == null || labourPricingModel.isBlank()) {
+            return null;
+        }
+        return switch (labourPricingModel.trim().toUpperCase().replace(' ', '_')) {
+            case "HALF_DAY" -> "HALF_DAY";
+            case "FULL_DAY" -> "FULL_DAY";
+            default -> null;
+        };
     }
 
     private int resolveTimeoutSeconds(BookingFlowType bookingType) {

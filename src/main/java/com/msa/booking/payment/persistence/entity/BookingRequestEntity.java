@@ -61,6 +61,9 @@ public class BookingRequestEntity {
     @Column(name = "subcategory_id")
     private Long subcategoryId;
 
+    @Column(name = "labour_pricing_model", length = 20)
+    private String labourPricingModel;
+
     @Column(name = "scheduled_start_at", nullable = false)
     private LocalDateTime scheduledStartAt;
 

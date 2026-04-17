@@ -3,16 +3,20 @@ package com.msa.booking.payment.payment.service.impl;
 import com.msa.booking.payment.booking.support.BookingPolicyService;
 import com.msa.booking.payment.common.exception.BadRequestException;
 import com.msa.booking.payment.domain.enums.BookingFlowType;
+import com.msa.booking.payment.domain.enums.BookingActionOtpStatus;
 import com.msa.booking.payment.domain.enums.BookingLifecycleStatus;
+import com.msa.booking.payment.domain.enums.BookingOtpPurpose;
 import com.msa.booking.payment.domain.enums.PayablePaymentStatus;
 import com.msa.booking.payment.domain.enums.PayableType;
 import com.msa.booking.payment.domain.enums.PaymentLifecycleStatus;
+import com.msa.booking.payment.persistence.entity.BookingActionOtpEntity;
 import com.msa.booking.payment.persistence.entity.BookingEntity;
 import com.msa.booking.payment.persistence.entity.PaymentEntity;
 import com.msa.booking.payment.persistence.entity.PaymentAttemptEntity;
 import com.msa.booking.payment.persistence.entity.PaymentTransactionEntity;
 import com.msa.booking.payment.persistence.repository.BookingRepository;
 import com.msa.booking.payment.persistence.repository.BookingSupportRepository;
+import com.msa.booking.payment.persistence.repository.BookingActionOtpRepository;
 import com.msa.booking.payment.persistence.repository.PaymentAttemptRepository;
 import com.msa.booking.payment.persistence.repository.PaymentRepository;
 import com.msa.booking.payment.payment.dto.BookingPaymentData;
@@ -31,7 +35,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 
 @Service
 public class BookingPaymentServiceImpl implements BookingPaymentService {
@@ -40,6 +46,7 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
     private final PaymentAttemptRepository paymentAttemptRepository;
     private final PaymentTransactionRepository paymentTransactionRepository;
     private final BookingSupportRepository bookingSupportRepository;
+    private final BookingActionOtpRepository bookingActionOtpRepository;
     private final BookingPolicyService bookingPolicyService;
     private final BookingHistoryService bookingHistoryService;
     private final NotificationService notificationService;
@@ -51,6 +58,7 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
             PaymentAttemptRepository paymentAttemptRepository,
             PaymentTransactionRepository paymentTransactionRepository,
             BookingSupportRepository bookingSupportRepository,
+            BookingActionOtpRepository bookingActionOtpRepository,
             BookingPolicyService bookingPolicyService,
             BookingHistoryService bookingHistoryService,
             NotificationService notificationService,
@@ -61,6 +69,7 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
         this.paymentAttemptRepository = paymentAttemptRepository;
         this.paymentTransactionRepository = paymentTransactionRepository;
         this.bookingSupportRepository = bookingSupportRepository;
+        this.bookingActionOtpRepository = bookingActionOtpRepository;
         this.bookingPolicyService = bookingPolicyService;
         this.bookingHistoryService = bookingHistoryService;
         this.notificationService = notificationService;
@@ -181,6 +190,7 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
         booking.setPaymentStatus(PayablePaymentStatus.PAID);
         booking.setBookingStatus(BookingLifecycleStatus.PAYMENT_COMPLETED);
         bookingRepository.save(booking);
+        prepareStartWorkOtp(booking);
         bookingHistoryService.recordBookingStatus(booking, oldStatus, booking.getBookingStatus().name(), booking.getUserId(), "Payment completed");
         notificationService.notifyUser(
                 booking.getUserId(),
@@ -262,6 +272,30 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
         payment.setCurrencyCode("INR");
         payment.setInitiatedAt(LocalDateTime.now());
         return paymentRepository.save(payment);
+    }
+
+    private void prepareStartWorkOtp(BookingEntity booking) {
+        List<BookingActionOtpEntity> openOtps = bookingActionOtpRepository
+                .findByBookingIdAndOtpPurposeAndOtpStatus(
+                        booking.getId(),
+                        BookingOtpPurpose.START_WORK,
+                        BookingActionOtpStatus.GENERATED
+                );
+        for (BookingActionOtpEntity otp : openOtps) {
+            otp.setOtpStatus(BookingActionOtpStatus.CANCELLED);
+        }
+        if (!openOtps.isEmpty()) {
+            bookingActionOtpRepository.saveAll(openOtps);
+        }
+
+        BookingActionOtpEntity otp = new BookingActionOtpEntity();
+        otp.setBookingId(booking.getId());
+        otp.setOtpPurpose(BookingOtpPurpose.START_WORK);
+        otp.setOtpCode(String.valueOf(ThreadLocalRandom.current().nextInt(100000, 1_000_000)));
+        otp.setIssuedToUserId(booking.getUserId());
+        otp.setOtpStatus(BookingActionOtpStatus.GENERATED);
+        otp.setExpiresAt(booking.getScheduledStartAt().plusMinutes(bookingPolicyService.noShowAutoCancelMinutes()));
+        bookingActionOtpRepository.save(otp);
     }
 
     private BigDecimal resolvePaymentAmount(BookingEntity booking) {

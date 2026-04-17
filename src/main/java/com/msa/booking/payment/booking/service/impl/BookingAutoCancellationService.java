@@ -37,10 +37,14 @@ import java.time.temporal.TemporalAdjusters;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 @Service
 public class BookingAutoCancellationService {
     private static final Logger LOGGER = LoggerFactory.getLogger(BookingAutoCancellationService.class);
+    private static final int WARNING_SCAN_LOOKBACK_MINUTES = 180;
 
     private final BookingRepository bookingRepository;
     private final PaymentRepository paymentRepository;
@@ -52,6 +56,7 @@ public class BookingAutoCancellationService {
     private final BookingHistoryService bookingHistoryService;
     private final NotificationService notificationService;
     private final SettlementLifecycleService settlementLifecycleService;
+    private final Set<Long> warnedReachDeadlineBookingIds = ConcurrentHashMap.newKeySet();
 
     public BookingAutoCancellationService(
             BookingRepository bookingRepository,
@@ -84,9 +89,10 @@ public class BookingAutoCancellationService {
     @Transactional
     public void cancelStaleBookings() {
         int unpaid = cancelAcceptedButUnpaidBookings();
+        int warnings = notifyUpcomingReachDeadlineBookings();
         int noShow = cancelProviderNoShowBookings();
-        if (unpaid > 0 || noShow > 0) {
-            LOGGER.info("Auto-cancelled stale bookings. unpaid={}, noShow={}", unpaid, noShow);
+        if (unpaid > 0 || warnings > 0 || noShow > 0) {
+            LOGGER.info("Auto-processed stale bookings. unpaid={}, warnings={}, noShow={}", unpaid, warnings, noShow);
         }
     }
 
@@ -132,7 +138,47 @@ public class BookingAutoCancellationService {
         return cancelled;
     }
 
+    int notifyUpcomingReachDeadlineBookings() {
+        LocalDateTime now = LocalDateTime.now();
+        List<BookingEntity> activeConfirmedBookings = bookingRepository
+                .findTop500ByBookingStatusAndPaymentStatusAndScheduledStartAtAfterOrderByScheduledStartAtAsc(
+                        BookingLifecycleStatus.PAYMENT_COMPLETED,
+                        PayablePaymentStatus.PAID,
+                        now.minusMinutes(WARNING_SCAN_LOOKBACK_MINUTES)
+                );
+        Set<Long> activeIds = activeConfirmedBookings.stream()
+                .map(BookingEntity::getId)
+                .collect(Collectors.toSet());
+        warnedReachDeadlineBookingIds.retainAll(activeIds);
+
+        int warned = 0;
+        for (BookingEntity booking : activeConfirmedBookings) {
+            LocalDateTime reachByAt = booking.getScheduledStartAt().plusMinutes(resolveReachTimelineMinutes(booking));
+            LocalDateTime warningAt = reachByAt.minusMinutes(bookingPolicyService.reachWarningMinutes());
+            if (now.isBefore(warningAt) || !now.isBefore(reachByAt)) {
+                continue;
+            }
+            if (!warnedReachDeadlineBookingIds.add(booking.getId())) {
+                continue;
+            }
+            try {
+                notifyProvider(
+                        booking,
+                        "BOOKING_REACH_WARNING_PROVIDER",
+                        "Reach in 10 minutes",
+                        "Reach the customer within the next 10 minutes or this booking may be cancelled as no-show."
+                );
+                warned++;
+            } catch (RuntimeException exception) {
+                warnedReachDeadlineBookingIds.remove(booking.getId());
+                LOGGER.warn("Failed to send reach warning. bookingId={}", booking.getId(), exception);
+            }
+        }
+        return warned;
+    }
+
     private void cancelAcceptedButUnpaidBooking(BookingEntity booking) {
+        warnedReachDeadlineBookingIds.remove(booking.getId());
         String oldStatus = booking.getBookingStatus().name();
         booking.setBookingStatus(BookingLifecycleStatus.CANCELLED);
         booking.setPaymentStatus(PayablePaymentStatus.FAILED);
@@ -161,6 +207,7 @@ public class BookingAutoCancellationService {
     }
 
     private void cancelProviderNoShowBooking(BookingEntity booking) {
+        warnedReachDeadlineBookingIds.remove(booking.getId());
         String oldStatus = booking.getBookingStatus().name();
         booking.setBookingStatus(BookingLifecycleStatus.CANCELLED);
         bookingRepository.save(booking);
@@ -314,6 +361,18 @@ public class BookingAutoCancellationService {
         if (booking.getProviderEntityType() == ProviderEntityType.SERVICE_PROVIDER) {
             bookingSupportRepository.incrementAvailableServiceMen(booking.getProviderEntityId());
         }
+    }
+
+    private int resolveReachTimelineMinutes(BookingEntity booking) {
+        if (booking.getBookingType() == com.msa.booking.payment.domain.enums.BookingFlowType.LABOUR) {
+            return bookingPolicyService.labourReachTimelineMinutes();
+        }
+        String categoryName = booking.getBookingRequestId() == null
+                ? null
+                : bookingSupportRepository.findServiceCategoryNameByBookingRequestId(booking.getBookingRequestId()).orElse(null);
+        return "automobile".equalsIgnoreCase(categoryName)
+                ? bookingPolicyService.serviceAutomobileReachTimelineMinutes()
+                : bookingPolicyService.serviceDefaultReachTimelineMinutes();
     }
 
     private void notifyUser(BookingEntity booking, String type, String title, String body) {

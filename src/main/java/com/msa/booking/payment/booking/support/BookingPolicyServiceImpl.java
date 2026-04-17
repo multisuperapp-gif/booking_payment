@@ -35,6 +35,11 @@ public class BookingPolicyServiceImpl implements BookingPolicyService {
     }
 
     @Override
+    public int reachWarningMinutes() {
+        return resolveInt(BookingPaymentSettingsKeys.BOOKING_REACH_WARNING_MINUTES, 10);
+    }
+
+    @Override
     public int labourReachTimelineMinutes() {
         return resolveInt(BookingPaymentSettingsKeys.LABOUR_REACH_TIMELINE_MINUTES, 45);
     }

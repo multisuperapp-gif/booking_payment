@@ -6,6 +6,7 @@ import com.msa.booking.payment.booking.dto.BookingCandidateDecisionData;
 import com.msa.booking.payment.booking.dto.BookingRequestData;
 import com.msa.booking.payment.booking.dto.CreateBookingRequest;
 import com.msa.booking.payment.booking.dto.ExpireBookingRequestsResponse;
+import com.msa.booking.payment.booking.dto.ProviderActiveBookingData;
 import com.msa.booking.payment.booking.dto.ProviderPendingBookingRequestData;
 import com.msa.booking.payment.booking.dto.RejectBookingCandidateRequest;
 import com.msa.booking.payment.booking.dto.UserBookingRequestStatusData;
@@ -64,6 +65,14 @@ public class BookingRequestController {
             @RequestParam ProviderEntityType providerEntityType
     ) {
         return ApiResponse.ok(bookingRequestQueryService.pendingForProvider(userId, providerEntityType));
+    }
+
+    @GetMapping("/provider/active/latest")
+    public ApiResponse<ProviderActiveBookingData> providerLatestActive(
+            @RequestHeader("X-User-Id") Long userId,
+            @RequestParam ProviderEntityType providerEntityType
+    ) {
+        return ApiResponse.ok(bookingRequestQueryService.latestActiveForProvider(userId, providerEntityType));
     }
 
     @PostMapping

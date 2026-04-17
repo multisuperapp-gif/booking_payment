@@ -11,6 +11,8 @@ public interface BookingPolicyService {
 
     int noShowAutoCancelMinutes();
 
+    int reachWarningMinutes();
+
     int labourReachTimelineMinutes();
 
     int serviceAutomobileReachTimelineMinutes();

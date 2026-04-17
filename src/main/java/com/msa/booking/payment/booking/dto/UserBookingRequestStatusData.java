@@ -6,6 +6,7 @@ import com.msa.booking.payment.domain.enums.BookingRequestStatus;
 import com.msa.booking.payment.domain.enums.PayablePaymentStatus;
 import com.msa.booking.payment.domain.enums.ProviderEntityType;
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 public record UserBookingRequestStatusData(
         Long requestId,
@@ -19,6 +20,12 @@ public record UserBookingRequestStatusData(
         String providerPhone,
         BigDecimal quotedPriceAmount,
         BigDecimal distanceKm,
+        String providerPhotoObjectKey,
+        BigDecimal providerLatitude,
+        BigDecimal providerLongitude,
+        LocalDateTime paymentDueAt,
+        LocalDateTime reachByAt,
+        String labourPricingModel,
         Long bookingId,
         String bookingCode,
         BookingLifecycleStatus bookingStatus,

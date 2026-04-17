@@ -23,4 +23,10 @@ public interface BookingRepository extends JpaRepository<BookingEntity, Long> {
             PayablePaymentStatus paymentStatus,
             LocalDateTime scheduledStartAt
     );
+
+    List<BookingEntity> findTop500ByBookingStatusAndPaymentStatusAndScheduledStartAtAfterOrderByScheduledStartAtAsc(
+            BookingLifecycleStatus bookingStatus,
+            PayablePaymentStatus paymentStatus,
+            LocalDateTime scheduledStartAt
+    );
 }
