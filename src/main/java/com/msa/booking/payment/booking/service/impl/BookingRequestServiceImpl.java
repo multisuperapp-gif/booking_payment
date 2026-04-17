@@ -13,6 +13,7 @@ import com.msa.booking.payment.persistence.entity.BookingRequestCandidateEntity;
 import com.msa.booking.payment.persistence.entity.BookingRequestEntity;
 import com.msa.booking.payment.persistence.repository.BookingRequestCandidateRepository;
 import com.msa.booking.payment.persistence.repository.BookingRequestRepository;
+import com.msa.booking.payment.persistence.repository.BookingSupportRepository;
 import com.msa.booking.payment.notification.service.NotificationService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +33,7 @@ public class BookingRequestServiceImpl implements BookingRequestService {
     private final BookingRequestCandidateRepository bookingRequestCandidateRepository;
     private final BookingCandidateMatchingService bookingCandidateMatchingService;
     private final BookingPolicyService bookingPolicyService;
+    private final BookingSupportRepository bookingSupportRepository;
     private final NotificationService notificationService;
 
     public BookingRequestServiceImpl(
@@ -39,12 +41,14 @@ public class BookingRequestServiceImpl implements BookingRequestService {
             BookingRequestCandidateRepository bookingRequestCandidateRepository,
             BookingCandidateMatchingService bookingCandidateMatchingService,
             BookingPolicyService bookingPolicyService,
+            BookingSupportRepository bookingSupportRepository,
             NotificationService notificationService
     ) {
         this.bookingRequestRepository = bookingRequestRepository;
         this.bookingRequestCandidateRepository = bookingRequestCandidateRepository;
         this.bookingCandidateMatchingService = bookingCandidateMatchingService;
         this.bookingPolicyService = bookingPolicyService;
+        this.bookingSupportRepository = bookingSupportRepository;
         this.notificationService = notificationService;
     }
 
@@ -77,6 +81,7 @@ public class BookingRequestServiceImpl implements BookingRequestService {
 
         List<BookingRequestCandidateEntity> candidateEntities = buildCandidates(savedRequest.getId(), request, now, expiresAt);
         List<BookingRequestCandidateEntity> savedCandidates = bookingRequestCandidateRepository.saveAll(candidateEntities);
+        notifyCandidateProviders(savedRequest, savedCandidates);
         notificationService.notifyUser(
                 request.userId(),
                 "BOOKING_REQUEST_CREATED",
@@ -225,5 +230,29 @@ public class BookingRequestServiceImpl implements BookingRequestService {
 
     private String generateRequestCode() {
         return "BRQ-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase();
+    }
+
+    private void notifyCandidateProviders(BookingRequestEntity request, List<BookingRequestCandidateEntity> candidates) {
+        for (BookingRequestCandidateEntity candidate : candidates) {
+            Long providerUserId = candidate.getProviderEntityType() == com.msa.booking.payment.domain.enums.ProviderEntityType.LABOUR
+                    ? bookingSupportRepository.findLabourUserId(candidate.getProviderEntityId()).orElse(null)
+                    : bookingSupportRepository.findServiceProviderUserId(candidate.getProviderEntityId()).orElse(null);
+            if (providerUserId == null) {
+                continue;
+            }
+            notificationService.notifyUser(
+                    providerUserId,
+                    "BOOKING_REQUEST_NEW",
+                    "New booking request",
+                    "A customer is waiting for your response. Accept the request if you are available.",
+                    java.util.Map.of(
+                            "requestId", request.getId(),
+                            "requestCode", request.getRequestCode(),
+                            "candidateId", candidate.getId(),
+                            "providerEntityType", candidate.getProviderEntityType().name(),
+                            "providerEntityId", candidate.getProviderEntityId()
+                    )
+            );
+        }
     }
 }

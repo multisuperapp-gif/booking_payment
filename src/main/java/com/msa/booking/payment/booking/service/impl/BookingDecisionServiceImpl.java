@@ -48,7 +48,7 @@ public class BookingDecisionServiceImpl implements BookingDecisionService {
 
     @Override
     @Transactional
-    public BookingAcceptanceData acceptCandidate(AcceptBookingCandidateRequest request) {
+    public BookingAcceptanceData acceptCandidate(Long actingUserId, AcceptBookingCandidateRequest request) {
         BookingRequestEntity bookingRequest = bookingRequestRepository.findByIdAndRequestStatus(
                         request.requestId(), BookingRequestStatus.OPEN)
                 .orElseThrow(() -> new BadRequestException("Open booking request not found."));
@@ -59,6 +59,7 @@ public class BookingDecisionServiceImpl implements BookingDecisionService {
         if (acceptedCandidate.getCandidateStatus() != BookingRequestCandidateStatus.PENDING) {
             throw new BadRequestException("Only pending candidates can accept a booking request.");
         }
+        validateCandidateOwner(actingUserId, acceptedCandidate);
 
         LocalDateTime now = LocalDateTime.now();
         acceptedCandidate.setCandidateStatus(BookingRequestCandidateStatus.ACCEPTED);
@@ -146,7 +147,7 @@ public class BookingDecisionServiceImpl implements BookingDecisionService {
 
     @Override
     @Transactional
-    public BookingCandidateDecisionData rejectCandidate(RejectBookingCandidateRequest request) {
+    public BookingCandidateDecisionData rejectCandidate(Long actingUserId, RejectBookingCandidateRequest request) {
         BookingRequestEntity bookingRequest = bookingRequestRepository.findById(request.requestId())
                 .orElseThrow(() -> new BadRequestException("Booking request not found."));
         if (bookingRequest.getRequestStatus() != BookingRequestStatus.OPEN) {
@@ -159,6 +160,7 @@ public class BookingDecisionServiceImpl implements BookingDecisionService {
         if (candidate.getCandidateStatus() != BookingRequestCandidateStatus.PENDING) {
             throw new BadRequestException("Only pending candidates can reject a booking request.");
         }
+        validateCandidateOwner(actingUserId, candidate);
 
         candidate.setCandidateStatus(BookingRequestCandidateStatus.REJECTED);
         candidate.setRespondedAt(LocalDateTime.now());
@@ -190,5 +192,14 @@ public class BookingDecisionServiceImpl implements BookingDecisionService {
 
     private String generateBookingCode() {
         return "BKG-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase();
+    }
+
+    private void validateCandidateOwner(Long actingUserId, BookingRequestCandidateEntity candidate) {
+        Long expectedUserId = candidate.getProviderEntityType() == ProviderEntityType.LABOUR
+                ? bookingSupportRepository.findLabourUserId(candidate.getProviderEntityId()).orElse(null)
+                : bookingSupportRepository.findServiceProviderUserId(candidate.getProviderEntityId()).orElse(null);
+        if (expectedUserId == null || !expectedUserId.equals(actingUserId)) {
+            throw new BadRequestException("Authenticated user cannot act on this booking request candidate.");
+        }
     }
 }

@@ -104,6 +104,13 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
                 "Your provider has reached the location.",
                 java.util.Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode())
         );
+        notifyProviderBookingUpdate(
+                booking,
+                "BOOKING_ARRIVAL_RECORDED_PROVIDER",
+                "Arrival marked",
+                "You marked this booking as arrived.",
+                java.util.Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode())
+        );
         return lifecycle(booking, "Provider marked arrival.");
     }
 
@@ -161,6 +168,13 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
                         "Your booking work has started.",
                         java.util.Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode())
                 );
+                notifyProviderBookingUpdate(
+                        booking,
+                        "BOOKING_WORK_STARTED_PROVIDER",
+                        "Work started",
+                        "You marked this booking as in progress.",
+                        java.util.Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode())
+                );
                 yield lifecycle(booking, "Work started successfully.");
             }
             case COMPLETE_WORK -> {
@@ -177,6 +191,13 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
                         "BOOKING_COMPLETED",
                         "Booking completed",
                         "Your booking has been completed successfully.",
+                        java.util.Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode())
+                );
+                notifyProviderBookingUpdate(
+                        booking,
+                        "BOOKING_COMPLETED_PROVIDER",
+                        "Booking completed",
+                        "You marked this booking as completed.",
                         java.util.Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode())
                 );
                 yield lifecycle(booking, "Work completed successfully.");
@@ -197,6 +218,13 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
                         "BOOKING_CANCELLED",
                         "Booking cancelled",
                         "The booking was cancelled mutually.",
+                        java.util.Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode())
+                );
+                notifyProviderBookingUpdate(
+                        booking,
+                        "BOOKING_CANCELLED_PROVIDER",
+                        "Booking cancelled",
+                        "This booking was cancelled mutually.",
                         java.util.Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode())
                 );
                 yield lifecycle(booking, "Booking cancelled mutually.");
@@ -228,6 +256,13 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
                     "Your booking was cancelled because the provider did not reach in time.",
                     java.util.Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode())
             );
+            notifyProviderBookingUpdate(
+                    booking,
+                    "BOOKING_CANCELLED_PROVIDER",
+                    "Booking cancelled",
+                    "This booking was cancelled because the reach timeline was missed.",
+                    java.util.Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode())
+            );
             return lifecycle(booking, "Booking cancelled because provider did not reach in time.");
         }
 
@@ -244,6 +279,13 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
                     "BOOKING_CANCELLED",
                     "Booking cancelled",
                     "Your booking was cancelled after work started. Penalty rules were applied.",
+                    java.util.Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode())
+            );
+            notifyProviderBookingUpdate(
+                    booking,
+                    "BOOKING_CANCELLED_PROVIDER",
+                    "Booking cancelled",
+                    "Customer cancelled this booking after work started.",
                     java.util.Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode())
             );
             return lifecycle(booking, "Booking cancelled by user after work start. Penalty applied.");
@@ -452,36 +494,62 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
                 .orElseThrow(() -> new BadRequestException("Service provider user not found."));
     }
 
+    private void notifyProviderBookingUpdate(BookingEntity booking, String type, String title, String body, java.util.Map<String, Object> payload) {
+        notificationService.notifyUser(
+                resolveProviderUserId(booking),
+                type,
+                title,
+                body,
+                payload
+        );
+    }
+
     private BookingEntity loadBooking(Long bookingId) {
         return bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new BadRequestException("Booking not found."));
     }
 
     private void notifyBookingRefundSuccess(BookingEntity booking, PaymentEntity payment) {
+        java.util.Map<String, Object> payload = java.util.Map.of(
+                "bookingId", booking.getId(),
+                "bookingCode", booking.getBookingCode(),
+                "paymentCode", payment.getPaymentCode()
+        );
         notificationService.notifyUser(
                 booking.getUserId(),
                 "BOOKING_REFUND_SUCCESS",
                 "Refund completed",
                 "Your refund has been completed for the cancelled booking.",
-                java.util.Map.of(
-                        "bookingId", booking.getId(),
-                        "bookingCode", booking.getBookingCode(),
-                        "paymentCode", payment.getPaymentCode()
-                )
+                payload
+        );
+        notifyProviderBookingUpdate(
+                booking,
+                "BOOKING_REFUND_SUCCESS_PROVIDER",
+                "Refund completed",
+                "The customer refund for this booking has been completed.",
+                payload
         );
     }
 
     private void notifyBookingRefundRejected(BookingEntity booking, PaymentEntity payment) {
+        java.util.Map<String, Object> payload = java.util.Map.of(
+                "bookingId", booking.getId(),
+                "bookingCode", booking.getBookingCode(),
+                "paymentCode", payment.getPaymentCode()
+        );
         notificationService.notifyUser(
                 booking.getUserId(),
                 "BOOKING_REFUND_REJECTED",
                 "No refund applicable",
                 "This booking cancellation does not qualify for a refund under the current policy.",
-                java.util.Map.of(
-                        "bookingId", booking.getId(),
-                        "bookingCode", booking.getBookingCode(),
-                        "paymentCode", payment.getPaymentCode()
-                )
+                payload
+        );
+        notifyProviderBookingUpdate(
+                booking,
+                "BOOKING_REFUND_REJECTED_PROVIDER",
+                "Refund not applicable",
+                "No refund was applied for this booking under the current policy.",
+                payload
         );
     }
 

@@ -25,6 +25,7 @@ public record CreateBookingRequest(
         Long targetProviderEntityId,
         Long categoryId,
         Long subcategoryId,
+        String labourPricingModel,
         BigDecimal priceMinAmount,
         BigDecimal priceMaxAmount,
         BigDecimal searchLatitude,

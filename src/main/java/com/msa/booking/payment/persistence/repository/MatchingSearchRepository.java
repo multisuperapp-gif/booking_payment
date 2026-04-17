@@ -13,11 +13,12 @@ public interface MatchingSearchRepository extends Repository<BookingRequestEntit
     @Query(value = """
             SELECT
               lp.id AS providerEntityId,
-              MIN(LEAST(
-                COALESCE(pr.hourly_price, 99999999.99),
-                COALESCE(pr.half_day_price, 99999999.99),
-                COALESCE(pr.full_day_price, 99999999.99)
-              )) AS quotedPriceAmount,
+              CASE
+                WHEN :pricingModel = 'HALF_DAY' THEN COALESCE(MAX(CASE WHEN pr.pricing_model = 'HALF_DAY' AND pr.is_enabled = 1 THEN pr.half_day_price END), 0.00)
+                WHEN :pricingModel = 'FULL_DAY' THEN COALESCE(MAX(CASE WHEN pr.pricing_model = 'FULL_DAY' AND pr.is_enabled = 1 THEN pr.full_day_price END), 0.00)
+                ELSE COALESCE(MAX(CASE WHEN pr.pricing_model = 'HOURLY' AND pr.is_enabled = 1 THEN pr.hourly_price END), 0.00)
+              END AS quotedPriceAmount,
+              MAX(COALESCE(lsa.radius_km, 0)) AS radiusKm,
               MIN(
                 6371 * ACOS(
                   LEAST(1, GREATEST(-1,
@@ -33,6 +34,7 @@ public interface MatchingSearchRepository extends Repository<BookingRequestEntit
               AND pr.category_id = :categoryId
               AND pr.is_enabled = 1
             WHERE lp.approval_status = 'APPROVED'
+              AND lp.online_status = 1
               AND EXISTS (
                 SELECT 1
                 FROM labour_skills ls
@@ -53,22 +55,20 @@ public interface MatchingSearchRepository extends Repository<BookingRequestEntit
                   AND b.provider_entity_id = lp.id
                   AND b.booking_status IN ('ACCEPTED','PAYMENT_PENDING','PAYMENT_COMPLETED','ARRIVED','IN_PROGRESS')
               )
-              AND (
-                6371 * ACOS(
-                  LEAST(1, GREATEST(-1,
-                    COS(RADIANS(:latitude)) * COS(RADIANS(lsa.center_latitude)) *
-                    COS(RADIANS(lsa.center_longitude) - RADIANS(:longitude)) +
-                    SIN(RADIANS(:latitude)) * SIN(RADIANS(lsa.center_latitude))
-                  ))
-                )
-              ) <= lsa.radius_km
             GROUP BY lp.id
-            HAVING (:priceMin IS NULL OR quotedPriceAmount >= :priceMin)
+            HAVING quotedPriceAmount > 0
+               AND (:priceMin IS NULL OR quotedPriceAmount >= :priceMin)
                AND (:priceMax IS NULL OR quotedPriceAmount <= :priceMax)
+               AND (
+                    distanceKm IS NULL
+                    OR radiusKm <= 0
+                    OR distanceKm <= radiusKm
+               )
             ORDER BY distanceKm ASC, quotedPriceAmount ASC
             """, nativeQuery = true)
     List<LabourCandidateProjection> findEligibleLabourCandidates(
             @Param("categoryId") Long categoryId,
+            @Param("pricingModel") String pricingModel,
             @Param("scheduledStartAt") LocalDateTime scheduledStartAt,
             @Param("latitude") BigDecimal latitude,
             @Param("longitude") BigDecimal longitude,

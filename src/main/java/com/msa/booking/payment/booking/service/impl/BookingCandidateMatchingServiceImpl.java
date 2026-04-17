@@ -10,6 +10,7 @@ import com.msa.booking.payment.persistence.repository.LabourCandidateProjection;
 import com.msa.booking.payment.persistence.repository.MatchingSearchRepository;
 import com.msa.booking.payment.persistence.repository.ServiceCandidateProjection;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -52,8 +53,10 @@ public class BookingCandidateMatchingServiceImpl implements BookingCandidateMatc
         if (request.categoryId() == null) {
             throw new BadRequestException("Labour broadcast booking request requires category id.");
         }
+        String labourPricingModel = normalizeLabourPricingModel(request.labourPricingModel());
         List<LabourCandidateProjection> matches = matchingSearchRepository.findEligibleLabourCandidates(
                 request.categoryId(),
+                labourPricingModel,
                 request.scheduledStartAt(),
                 request.searchLatitude(),
                 request.searchLongitude(),
@@ -112,6 +115,18 @@ public class BookingCandidateMatchingServiceImpl implements BookingCandidateMatc
                 .filter(match -> match.providerEntityId().equals(request.targetProviderEntityId()))
                 .findFirst()
                 .orElseThrow(() -> new BadRequestException("Selected service provider is not eligible for booking right now."));
+    }
+
+    private String normalizeLabourPricingModel(String labourPricingModel) {
+        if (!StringUtils.hasText(labourPricingModel)) {
+            throw new BadRequestException("Labour booking request requires pricing model.");
+        }
+        return switch (labourPricingModel.trim().toUpperCase().replace(' ', '_')) {
+            case "HOURLY" -> "HOURLY";
+            case "HALF_DAY" -> "HALF_DAY";
+            case "FULL_DAY" -> "FULL_DAY";
+            default -> throw new BadRequestException("Unsupported labour pricing model.");
+        };
     }
 
     private BigDecimal normalizeAmount(BigDecimal value) {

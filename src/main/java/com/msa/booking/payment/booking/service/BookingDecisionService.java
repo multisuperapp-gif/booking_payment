@@ -3,7 +3,7 @@ package com.msa.booking.payment.booking.service;
 import com.msa.booking.payment.booking.dto.*;
 
 public interface BookingDecisionService {
-    BookingAcceptanceData acceptCandidate(AcceptBookingCandidateRequest request);
+    BookingAcceptanceData acceptCandidate(Long actingUserId, AcceptBookingCandidateRequest request);
 
-    BookingCandidateDecisionData rejectCandidate(RejectBookingCandidateRequest request);
+    BookingCandidateDecisionData rejectCandidate(Long actingUserId, RejectBookingCandidateRequest request);
 }

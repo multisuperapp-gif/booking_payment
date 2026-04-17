@@ -7,4 +7,6 @@ import java.util.List;
 
 public interface PushNotificationTokenRepository extends JpaRepository<PushNotificationTokenEntity, Long> {
     List<PushNotificationTokenEntity> findByUserIdAndActiveTrue(Long userId);
+
+    java.util.Optional<PushNotificationTokenEntity> findByPushToken(String pushToken);
 }

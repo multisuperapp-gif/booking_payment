@@ -161,6 +161,13 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
                         "Your booking payment was completed successfully.",
                         Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode(), "razorpayOrderId", gatewayOrderId)
                 );
+                notifyProvider(
+                        booking,
+                        "BOOKING_PAYMENT_SUCCESS_PROVIDER",
+                        "Customer payment received",
+                        "Customer payment is complete. You can proceed with the booking.",
+                        Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode(), "razorpayOrderId", gatewayOrderId)
+                );
             }
             return;
         }
@@ -223,6 +230,13 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
                         "Your booking payment failed and the booking was cancelled.",
                         Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode(), "razorpayOrderId", gatewayOrderId)
                 );
+                notifyProvider(
+                        booking,
+                        "BOOKING_PAYMENT_FAILED_PROVIDER",
+                        "Booking payment failed",
+                        "Customer payment failed, so this booking was cancelled.",
+                        Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode(), "razorpayOrderId", gatewayOrderId)
+                );
             }
             return;
         }
@@ -243,6 +257,15 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
                     "Your shop order payment failed and the order was cancelled.",
                     Map.of("orderId", order.getId(), "orderCode", order.getOrderCode(), "razorpayOrderId", gatewayOrderId)
             );
+        }
+    }
+
+    private void notifyProvider(BookingEntity booking, String type, String title, String body, Map<String, Object> payload) {
+        Long providerUserId = booking.getProviderEntityType() == ProviderEntityType.LABOUR
+                ? bookingSupportRepository.findLabourUserId(booking.getProviderEntityId()).orElse(null)
+                : bookingSupportRepository.findServiceProviderUserId(booking.getProviderEntityId()).orElse(null);
+        if (providerUserId != null) {
+            notificationService.notifyUser(providerUserId, type, title, body, payload);
         }
     }
 
