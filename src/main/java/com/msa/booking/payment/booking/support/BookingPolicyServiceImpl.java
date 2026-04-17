@@ -25,6 +25,16 @@ public class BookingPolicyServiceImpl implements BookingPolicyService {
     }
 
     @Override
+    public int acceptedPaymentTimeoutSeconds() {
+        return resolveInt(BookingPaymentSettingsKeys.BOOKING_ACCEPTED_PAYMENT_TIMEOUT_SECONDS, 300);
+    }
+
+    @Override
+    public int noShowAutoCancelMinutes() {
+        return resolveInt(BookingPaymentSettingsKeys.BOOKING_NO_SHOW_AUTO_CANCEL_MINUTES, 120);
+    }
+
+    @Override
     public int labourReachTimelineMinutes() {
         return resolveInt(BookingPaymentSettingsKeys.LABOUR_REACH_TIMELINE_MINUTES, 45);
     }
@@ -41,12 +51,12 @@ public class BookingPolicyServiceImpl implements BookingPolicyService {
 
     @Override
     public int labourNoShowSuspendThreshold() {
-        return resolveInt(BookingPaymentSettingsKeys.LABOUR_MONTHLY_NO_SHOW_SUSPEND_THRESHOLD, 3);
+        return resolveInt(BookingPaymentSettingsKeys.LABOUR_MONTHLY_NO_SHOW_SUSPEND_THRESHOLD, 2);
     }
 
     @Override
     public int serviceNoShowSuspendThreshold() {
-        return resolveInt(BookingPaymentSettingsKeys.SERVICE_MONTHLY_NO_SHOW_SUSPEND_THRESHOLD, 3);
+        return resolveInt(BookingPaymentSettingsKeys.SERVICE_MONTHLY_NO_SHOW_SUSPEND_THRESHOLD, 2);
     }
 
     @Override

@@ -6,6 +6,8 @@ public final class BookingPaymentSettingsKeys {
 
     public static final String LABOUR_DIRECT_REQUEST_TIMEOUT_SECONDS = "labour.direct.request.timeout.seconds";
     public static final String SERVICE_DIRECT_REQUEST_TIMEOUT_SECONDS = "service.direct.request.timeout.seconds";
+    public static final String BOOKING_ACCEPTED_PAYMENT_TIMEOUT_SECONDS = "booking.accepted.payment.timeout.seconds";
+    public static final String BOOKING_NO_SHOW_AUTO_CANCEL_MINUTES = "booking.no.show.auto.cancel.minutes";
     public static final String LABOUR_REACH_TIMELINE_MINUTES = "labour.reach.timeline.minutes";
     public static final String SERVICE_REACH_TIMELINE_AUTOMOBILE_MINUTES = "service.reach.timeline.automobile.minutes";
     public static final String SERVICE_REACH_TIMELINE_DEFAULT_MINUTES = "service.reach.timeline.default.minutes";

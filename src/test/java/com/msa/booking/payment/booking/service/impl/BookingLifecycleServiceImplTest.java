@@ -150,6 +150,7 @@ class BookingLifecycleServiceImplTest {
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
         when(paymentRepository.findByPayableTypeAndPayableId(PayableType.BOOKING, booking.getId())).thenReturn(Optional.of(payment));
         when(refundRepository.findTopByPaymentIdOrderByIdDesc(payment.getId())).thenReturn(Optional.of(refund));
+        when(bookingSupportRepository.findServiceProviderUserId(booking.getProviderEntityId())).thenReturn(Optional.of(99L));
         when(bookingPolicyService.postStartCancellationPenaltyAmount()).thenReturn(BigDecimal.valueOf(149));
 
         service.cancelByUser(new UserCancelBookingRequest(booking.getId(), "Need to stop"));

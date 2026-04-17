@@ -128,6 +128,19 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
         otp.setOtpStatus(BookingActionOtpStatus.GENERATED);
         otp.setExpiresAt(LocalDateTime.now().plusMinutes(OTP_EXPIRY_MINUTES));
         bookingActionOtpRepository.save(otp);
+        if (request.purpose() == BookingOtpPurpose.MUTUAL_CANCEL) {
+            notifyProviderBookingUpdate(
+                    booking,
+                    "BOOKING_MUTUAL_CANCEL_OTP",
+                    "Mutual cancellation OTP",
+                    "Share this OTP with the customer only if both sides agree to cancel. Booking charges are non-refundable after arrival.",
+                    java.util.Map.of(
+                            "bookingId", booking.getId(),
+                            "bookingCode", booking.getBookingCode(),
+                            "otpCode", otp.getOtpCode()
+                    )
+            );
+        }
         return new BookingOtpData(booking.getId(), request.purpose(), otp.getOtpCode(), otp.getExpiresAt());
     }
 
@@ -203,28 +216,28 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
                 yield lifecycle(booking, "Work completed successfully.");
             }
             case MUTUAL_CANCEL -> {
-                if (booking.getBookingStatus() == BookingLifecycleStatus.COMPLETED
-                        || booking.getBookingStatus() == BookingLifecycleStatus.CANCELLED) {
-                    throw new BadRequestException("Mutual cancellation is not allowed for this booking.");
+                if (booking.getBookingStatus() != BookingLifecycleStatus.ARRIVED
+                        && booking.getBookingStatus() != BookingLifecycleStatus.IN_PROGRESS) {
+                    throw new BadRequestException("Mutual cancellation is allowed only after arrival or work start.");
                 }
                 String oldStatus = booking.getBookingStatus().name();
                 booking.setBookingStatus(BookingLifecycleStatus.CANCELLED);
                 bookingRepository.save(booking);
                 bookingHistoryService.recordBookingStatus(booking, oldStatus, booking.getBookingStatus().name(), booking.getUserId(), "Mutual cancellation");
                 releaseCapacityIfNeeded(booking);
-                applyFullRefundIfPaid(booking, "Mutual cancellation");
+                applyNoRefundIfPaid(booking, "Mutual cancellation after arrival. Booking charges are non-refundable.");
                 notificationService.notifyUser(
                         booking.getUserId(),
                         "BOOKING_CANCELLED",
                         "Booking cancelled",
-                        "The booking was cancelled mutually.",
+                        "The booking was cancelled mutually. Booking charges are non-refundable after arrival.",
                         java.util.Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode())
                 );
                 notifyProviderBookingUpdate(
                         booking,
                         "BOOKING_CANCELLED_PROVIDER",
                         "Booking cancelled",
-                        "This booking was cancelled mutually.",
+                        "This booking was cancelled mutually. Booking charges were not refunded.",
                         java.util.Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode())
                 );
                 yield lifecycle(booking, "Booking cancelled mutually.");
@@ -307,9 +320,9 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
                 }
             }
             case MUTUAL_CANCEL -> {
-                if (booking.getBookingStatus() == BookingLifecycleStatus.COMPLETED
-                        || booking.getBookingStatus() == BookingLifecycleStatus.CANCELLED) {
-                    throw new BadRequestException("Mutual cancel OTP is not allowed for this booking.");
+                if (booking.getBookingStatus() != BookingLifecycleStatus.ARRIVED
+                        && booking.getBookingStatus() != BookingLifecycleStatus.IN_PROGRESS) {
+                    throw new BadRequestException("Mutual cancel OTP can be generated only after arrival or work start.");
                 }
             }
         }
@@ -391,6 +404,26 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
                 payment.getAmount(),
                 BigDecimal.ZERO,
                 "User cancelled after work started. No refund to user; provider half-share applies offline."
+        );
+        notifyBookingRefundRejected(booking, payment);
+    }
+
+    private void applyNoRefundIfPaid(BookingEntity booking, String reason) {
+        if (booking.getPaymentStatus() != PayablePaymentStatus.PAID) {
+            return;
+        }
+        PaymentEntity payment = paymentRepository.findByPayableTypeAndPayableId(PayableType.BOOKING, booking.getId())
+                .orElse(null);
+        if (payment == null) {
+            return;
+        }
+        upsertRefund(
+                payment,
+                "RFN-" + booking.getBookingCode(),
+                RefundLifecycleStatus.REJECTED,
+                payment.getAmount(),
+                BigDecimal.ZERO,
+                reason
         );
         notifyBookingRefundRejected(booking, payment);
     }

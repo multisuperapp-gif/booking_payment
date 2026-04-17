@@ -7,6 +7,10 @@ public interface BookingPolicyService {
 
     int serviceDirectRequestTimeoutSeconds();
 
+    int acceptedPaymentTimeoutSeconds();
+
+    int noShowAutoCancelMinutes();
+
     int labourReachTimelineMinutes();
 
     int serviceAutomobileReachTimelineMinutes();
