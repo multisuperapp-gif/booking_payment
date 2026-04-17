@@ -19,6 +19,7 @@ import com.msa.booking.payment.persistence.entity.PaymentAttemptEntity;
 import com.msa.booking.payment.persistence.entity.PaymentEntity;
 import com.msa.booking.payment.persistence.repository.BookingRepository;
 import com.msa.booking.payment.persistence.repository.BookingSupportRepository;
+import com.msa.booking.payment.persistence.repository.BookingActionOtpRepository;
 import com.msa.booking.payment.persistence.repository.PaymentAttemptRepository;
 import com.msa.booking.payment.persistence.repository.PaymentRepository;
 import com.msa.booking.payment.persistence.repository.PaymentTransactionRepository;
@@ -61,6 +62,8 @@ class BookingPaymentServiceImplTest {
     @Mock
     private BookingSupportRepository bookingSupportRepository;
     @Mock
+    private BookingActionOtpRepository bookingActionOtpRepository;
+    @Mock
     private BookingPolicyService bookingPolicyService;
     @Mock
     private BookingHistoryService bookingHistoryService;
@@ -79,6 +82,7 @@ class BookingPaymentServiceImplTest {
                 paymentAttemptRepository,
                 paymentTransactionRepository,
                 bookingSupportRepository,
+                bookingActionOtpRepository,
                 bookingPolicyService,
                 bookingHistoryService,
                 notificationService,
