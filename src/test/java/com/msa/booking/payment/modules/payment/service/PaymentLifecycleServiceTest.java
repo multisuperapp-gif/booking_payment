@@ -14,6 +14,7 @@ import com.msa.booking.payment.persistence.entity.BookingEntity;
 import com.msa.booking.payment.persistence.entity.PaymentAttemptEntity;
 import com.msa.booking.payment.persistence.entity.PaymentEntity;
 import com.msa.booking.payment.persistence.repository.BookingRepository;
+import com.msa.booking.payment.persistence.repository.BookingRequestRepository;
 import com.msa.booking.payment.persistence.repository.OrderItemRepository;
 import com.msa.booking.payment.persistence.repository.OrderRepository;
 import com.msa.booking.payment.persistence.repository.PaymentAttemptRepository;
@@ -62,6 +63,8 @@ class PaymentLifecycleServiceTest {
     @Mock
     private BookingRepository bookingRepository;
     @Mock
+    private BookingRequestRepository bookingRequestRepository;
+    @Mock
     private NamedParameterJdbcTemplate jdbcTemplate;
     @Mock
     private RazorpayProperties razorpayProperties;
@@ -86,6 +89,7 @@ class PaymentLifecycleServiceTest {
                 orderItemRepository,
                 shopOrderSupportRepository,
                 bookingRepository,
+                bookingRequestRepository,
                 jdbcTemplate,
                 razorpayProperties,
                 razorpaySignatureService,

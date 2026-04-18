@@ -20,6 +20,7 @@ import com.msa.booking.payment.persistence.entity.PaymentEntity;
 import com.msa.booking.payment.persistence.repository.BookingRepository;
 import com.msa.booking.payment.persistence.repository.BookingSupportRepository;
 import com.msa.booking.payment.persistence.repository.BookingActionOtpRepository;
+import com.msa.booking.payment.persistence.repository.BookingRequestRepository;
 import com.msa.booking.payment.persistence.repository.PaymentAttemptRepository;
 import com.msa.booking.payment.persistence.repository.PaymentRepository;
 import com.msa.booking.payment.persistence.repository.PaymentTransactionRepository;
@@ -64,6 +65,8 @@ class BookingPaymentServiceImplTest {
     @Mock
     private BookingActionOtpRepository bookingActionOtpRepository;
     @Mock
+    private BookingRequestRepository bookingRequestRepository;
+    @Mock
     private BookingPolicyService bookingPolicyService;
     @Mock
     private BookingHistoryService bookingHistoryService;
@@ -83,6 +86,7 @@ class BookingPaymentServiceImplTest {
                 paymentTransactionRepository,
                 bookingSupportRepository,
                 bookingActionOtpRepository,
+                bookingRequestRepository,
                 bookingPolicyService,
                 bookingHistoryService,
                 notificationService,
@@ -116,7 +120,7 @@ class BookingPaymentServiceImplTest {
                         "created"
                 ));
 
-        var response = service.initiate(new InitiateBookingPaymentRequest(10L));
+        var response = service.initiate(new InitiateBookingPaymentRequest(10L, null));
 
         assertEquals("order_123", response.razorpayOrderId());
         assertEquals("rzp_test_key", response.razorpayKeyId());
@@ -155,7 +159,7 @@ class BookingPaymentServiceImplTest {
                 .thenReturn(Optional.of(attempt));
         when(razorpayGatewayService.configuredKeyId()).thenReturn("rzp_live_reuse");
 
-        var response = service.initiate(new InitiateBookingPaymentRequest(10L));
+        var response = service.initiate(new InitiateBookingPaymentRequest(10L, null));
 
         assertEquals("order_reuse", response.razorpayOrderId());
         assertEquals("rzp_live_reuse", response.razorpayKeyId());
