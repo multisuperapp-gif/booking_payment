@@ -60,6 +60,13 @@ public class BookingRequestController {
         return ApiResponse.ok(bookingRequestQueryService.latestActiveForUser(userId));
     }
 
+    @GetMapping("/active")
+    public ApiResponse<List<UserBookingRequestStatusData>> activeForUser(
+            @RequestHeader("X-User-Id") Long userId
+    ) {
+        return ApiResponse.ok(bookingRequestQueryService.activeForUser(userId));
+    }
+
     @GetMapping("/provider/pending")
     public ApiResponse<List<ProviderPendingBookingRequestData>> providerPending(
             @RequestHeader("X-User-Id") Long userId,

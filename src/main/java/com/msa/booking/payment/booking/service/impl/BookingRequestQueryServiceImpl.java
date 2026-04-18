@@ -60,7 +60,7 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
             ProviderEntityType providerEntityType
     ) {
         return jdbcTemplate.query("""
-                SELECT
+                SELECT DISTINCT
                     br.id AS request_id,
                     br.request_code,
                     br.booking_type,
@@ -338,22 +338,31 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
     }
 
     @Override
-    public UserBookingRequestStatusData latestActiveForUser(Long actingUserId) {
+    public List<UserBookingRequestStatusData> activeForUser(Long actingUserId) {
+        java.util.List<UserBookingRequestStatusData> activeStatuses = new java.util.ArrayList<>();
         for (BookingRequestEntity request : bookingRequestRepository.findTop20ByUserIdOrderByCreatedAtDesc(actingUserId)) {
             BookingEntity booking = bookingRepository.findByBookingRequestIdOrderByIdAsc(request.getId())
                     .stream()
                     .findFirst()
                     .orElse(null);
             if (isActiveForUser(request, booking)) {
-                return buildStatusData(request, booking);
+                activeStatuses.add(buildStatusData(request, booking));
             }
         }
-        return null;
+        return activeStatuses;
+    }
+
+    @Override
+    public UserBookingRequestStatusData latestActiveForUser(Long actingUserId) {
+        return activeForUser(actingUserId).stream().findFirst().orElse(null);
     }
 
     private boolean isActiveForUser(BookingRequestEntity request, BookingEntity booking) {
-        if (request.getRequestStatus() == BookingRequestStatus.OPEN || request.getRequestStatus() == BookingRequestStatus.ACCEPTED) {
+        if (request.getRequestStatus() == BookingRequestStatus.ACCEPTED) {
             return true;
+        }
+        if (request.getRequestStatus() == BookingRequestStatus.OPEN) {
+            return booking != null;
         }
         if (booking == null || booking.getBookingStatus() == null) {
             return false;

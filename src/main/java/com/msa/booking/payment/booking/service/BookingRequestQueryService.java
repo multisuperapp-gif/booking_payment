@@ -13,5 +13,7 @@ public interface BookingRequestQueryService {
 
     UserBookingRequestStatusData statusForUser(Long actingUserId, Long requestId);
 
+    List<UserBookingRequestStatusData> activeForUser(Long actingUserId);
+
     UserBookingRequestStatusData latestActiveForUser(Long actingUserId);
 }
