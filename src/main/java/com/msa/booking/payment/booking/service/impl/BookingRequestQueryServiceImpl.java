@@ -319,14 +319,20 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
         if (!actingUserId.equals(request.getUserId())) {
             throw new BadRequestException("Authenticated user cannot access this booking request.");
         }
-        BookingEntity booking = bookingRepository.findByBookingRequestId(requestId).orElse(null);
+        BookingEntity booking = bookingRepository.findByBookingRequestIdOrderByIdAsc(requestId)
+                .stream()
+                .findFirst()
+                .orElse(null);
         return buildStatusData(request, booking);
     }
 
     @Override
     public UserBookingRequestStatusData latestActiveForUser(Long actingUserId) {
         for (BookingRequestEntity request : bookingRequestRepository.findTop20ByUserIdOrderByCreatedAtDesc(actingUserId)) {
-            BookingEntity booking = bookingRepository.findByBookingRequestId(request.getId()).orElse(null);
+            BookingEntity booking = bookingRepository.findByBookingRequestIdOrderByIdAsc(request.getId())
+                    .stream()
+                    .findFirst()
+                    .orElse(null);
             if (isActiveForUser(request, booking)) {
                 return buildStatusData(request, booking);
             }
@@ -351,6 +357,24 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 .stream()
                 .findFirst()
                 .orElse(null);
+        int acceptedProviderCount = bookingRequestCandidateRepository
+                .findByRequestIdAndCandidateStatus(request.getId(), BookingRequestCandidateStatus.ACCEPTED)
+                .size();
+        int pendingProviderCount = bookingRequestCandidateRepository
+                .findByRequestIdAndCandidateStatus(request.getId(), BookingRequestCandidateStatus.PENDING)
+                .size();
+        List<BookingEntity> requestBookings = bookingRepository.findByBookingRequestIdOrderByIdAsc(request.getId());
+        BookingEntity paymentReadyBooking = requestBookings.stream()
+                .filter(candidateBooking -> candidateBooking.getBookingStatus() == BookingLifecycleStatus.PAYMENT_PENDING)
+                .filter(candidateBooking -> candidateBooking.getPaymentStatus() == PayablePaymentStatus.UNPAID
+                        || candidateBooking.getPaymentStatus() == PayablePaymentStatus.PENDING)
+                .findFirst()
+                .orElse(null);
+        if (paymentReadyBooking != null) {
+            booking = paymentReadyBooking;
+        } else if (booking == null && !requestBookings.isEmpty()) {
+            booking = requestBookings.getFirst();
+        }
 
         Long candidateId = acceptedCandidate == null ? null : acceptedCandidate.getId();
         ProviderEntityType providerEntityType = acceptedCandidate == null ? null : acceptedCandidate.getProviderEntityType();
@@ -359,6 +383,16 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
         String providerPhone = null;
         ProviderLocationPhotoData providerLocationPhotoData = null;
         java.math.BigDecimal quotedPriceAmount = acceptedCandidate == null ? null : acceptedCandidate.getQuotedPriceAmount();
+        java.math.BigDecimal totalAcceptedQuotedPriceAmount = requestBookings.stream()
+                .filter(candidateBooking -> candidateBooking.getBookingStatus() != BookingLifecycleStatus.CANCELLED)
+                .map(candidateBooking -> candidateBooking.getSubtotalAmount() == null ? BigDecimal.ZERO : candidateBooking.getSubtotalAmount())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        java.math.BigDecimal totalAcceptedBookingChargeAmount = request.getBookingType() == BookingFlowType.LABOUR
+                ? requestBookings.stream()
+                        .filter(candidateBooking -> candidateBooking.getBookingStatus() != BookingLifecycleStatus.CANCELLED)
+                        .map(candidateBooking -> bookingPolicyService.labourBookingChargeAmount(candidateBooking.getSubtotalAmount()))
+                        .reduce(BigDecimal.ZERO, BigDecimal::add)
+                : BigDecimal.ZERO;
         java.math.BigDecimal distanceKm = acceptedCandidate == null ? null : acceptedCandidate.getDistanceKm();
 
         if (acceptedCandidate != null) {
@@ -396,6 +430,8 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 providerName,
                 providerPhone,
                 quotedPriceAmount,
+                totalAcceptedQuotedPriceAmount,
+                totalAcceptedBookingChargeAmount,
                 distanceKm,
                 providerLocationPhotoData == null ? null : providerLocationPhotoData.photoObjectKey(),
                 !revealProviderLiveLocation || providerLocationPhotoData == null ? null : providerLocationPhotoData.latitude(),
@@ -403,6 +439,9 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 paymentDueAt,
                 reachByAt,
                 request.getLabourPricingModel(),
+                request.getRequestedProviderCount() == null ? 1 : request.getRequestedProviderCount(),
+                acceptedProviderCount,
+                pendingProviderCount,
                 booking == null ? null : booking.getId(),
                 booking == null ? null : booking.getBookingCode(),
                 booking == null ? null : booking.getBookingStatus(),

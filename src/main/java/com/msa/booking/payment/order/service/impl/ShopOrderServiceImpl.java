@@ -619,8 +619,10 @@ public class ShopOrderServiceImpl implements ShopOrderService {
     }
 
     private void notifyShopOwner(Long shopId, String type, String title, String body, Map<String, Object> payload) {
+        Map<String, Object> ownerPayload = new java.util.LinkedHashMap<>(payload);
+        ownerPayload.put("appContext", "PROVIDER_APP");
         shopOrderSupportRepository.findShopOwnerUserId(shopId)
-                .ifPresent(ownerUserId -> notificationService.notifyUser(ownerUserId, type, title, body, payload));
+                .ifPresent(ownerUserId -> notificationService.notifyUser(ownerUserId, type, title, body, ownerPayload));
     }
 
     private void notifyOrderRefundSuccess(OrderEntity order, RefundEntity refund) {

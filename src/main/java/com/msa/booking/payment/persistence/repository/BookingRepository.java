@@ -12,6 +12,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface BookingRepository extends JpaRepository<BookingEntity, Long> {
     Optional<BookingEntity> findByBookingRequestId(Long bookingRequestId);
 
+    List<BookingEntity> findByBookingRequestIdOrderByIdAsc(Long bookingRequestId);
+
     List<BookingEntity> findTop100ByBookingStatusAndPaymentStatusInAndCreatedAtBefore(
             BookingLifecycleStatus bookingStatus,
             Collection<PayablePaymentStatus> paymentStatuses,

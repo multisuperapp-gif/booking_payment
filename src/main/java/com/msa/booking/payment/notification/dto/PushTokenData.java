@@ -8,6 +8,7 @@ public record PushTokenData(
         Long userDeviceId,
         String platform,
         String pushProvider,
+        String appContext,
         String pushToken,
         boolean active,
         LocalDateTime lastSeenAt

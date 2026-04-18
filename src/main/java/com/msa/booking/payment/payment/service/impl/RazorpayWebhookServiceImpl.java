@@ -265,7 +265,9 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
                 ? bookingSupportRepository.findLabourUserId(booking.getProviderEntityId()).orElse(null)
                 : bookingSupportRepository.findServiceProviderUserId(booking.getProviderEntityId()).orElse(null);
         if (providerUserId != null) {
-            notificationService.notifyUser(providerUserId, type, title, body, payload);
+            Map<String, Object> providerPayload = new java.util.LinkedHashMap<>(payload);
+            providerPayload.put("appContext", "PROVIDER_APP");
+            notificationService.notifyUser(providerUserId, type, title, body, providerPayload);
         }
     }
 

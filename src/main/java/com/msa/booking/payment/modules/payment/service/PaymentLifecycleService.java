@@ -22,12 +22,14 @@ import com.msa.booking.payment.modules.payment.dto.PaymentDtos.WebhookAcknowledg
 import com.msa.booking.payment.modules.settlement.service.SettlementLifecycleService;
 import com.msa.booking.payment.notification.service.NotificationService;
 import com.msa.booking.payment.persistence.entity.BookingEntity;
+import com.msa.booking.payment.persistence.entity.BookingRequestEntity;
 import com.msa.booking.payment.persistence.entity.OrderEntity;
 import com.msa.booking.payment.persistence.entity.PaymentAttemptEntity;
 import com.msa.booking.payment.persistence.entity.PaymentEntity;
 import com.msa.booking.payment.persistence.entity.PaymentTransactionEntity;
 import com.msa.booking.payment.persistence.entity.OrderItemEntity;
 import com.msa.booking.payment.persistence.repository.BookingRepository;
+import com.msa.booking.payment.persistence.repository.BookingRequestRepository;
 import com.msa.booking.payment.persistence.repository.OrderItemRepository;
 import com.msa.booking.payment.persistence.repository.OrderRepository;
 import com.msa.booking.payment.persistence.repository.PaymentAttemptRepository;
@@ -38,6 +40,7 @@ import com.razorpay.Order;
 import com.razorpay.RazorpayClient;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 import org.json.JSONObject;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -56,6 +59,7 @@ public class PaymentLifecycleService {
     private final OrderItemRepository orderItemRepository;
     private final ShopOrderSupportRepository shopOrderSupportRepository;
     private final BookingRepository bookingRepository;
+    private final BookingRequestRepository bookingRequestRepository;
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final RazorpayProperties razorpayProperties;
     private final RazorpaySignatureService razorpaySignatureService;
@@ -72,6 +76,7 @@ public class PaymentLifecycleService {
             OrderItemRepository orderItemRepository,
             ShopOrderSupportRepository shopOrderSupportRepository,
             BookingRepository bookingRepository,
+            BookingRequestRepository bookingRequestRepository,
             NamedParameterJdbcTemplate jdbcTemplate,
             RazorpayProperties razorpayProperties,
             RazorpaySignatureService razorpaySignatureService,
@@ -87,6 +92,7 @@ public class PaymentLifecycleService {
         this.orderItemRepository = orderItemRepository;
         this.shopOrderSupportRepository = shopOrderSupportRepository;
         this.bookingRepository = bookingRepository;
+        this.bookingRequestRepository = bookingRequestRepository;
         this.jdbcTemplate = jdbcTemplate;
         this.razorpayProperties = razorpayProperties;
         this.razorpaySignatureService = razorpaySignatureService;
@@ -331,6 +337,23 @@ public class PaymentLifecycleService {
                             "paymentCode", payment.getPaymentCode()
                     )
             );
+            return;
+        }
+
+        if (payment.getPayableType() == PayableType.BOOKING_REQUEST) {
+            BookingRequestEntity request = bookingRequestRepository.findById(payment.getPayableId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Linked booking request not found"));
+            notificationService.notifyUser(
+                    payment.getPayerUserId(),
+                    "BOOKING_PAYMENT_PENDING",
+                    "Complete your payment",
+                    "Your group labour booking payment is waiting for completion.",
+                    Map.of(
+                            "requestId", request.getId(),
+                            "requestCode", request.getRequestCode(),
+                            "paymentCode", payment.getPaymentCode()
+                    )
+            );
         }
     }
 
@@ -363,6 +386,23 @@ public class PaymentLifecycleService {
                     Map.of(
                             "bookingId", booking.getId(),
                             "bookingCode", booking.getBookingCode(),
+                            "paymentCode", payment.getPaymentCode()
+                    )
+            );
+            return;
+        }
+
+        if (payment.getPayableType() == PayableType.BOOKING_REQUEST) {
+            BookingRequestEntity request = bookingRequestRepository.findById(payment.getPayableId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Linked booking request not found"));
+            notificationService.notifyUser(
+                    payment.getPayerUserId(),
+                    "BOOKING_PAYMENT_SUCCESS",
+                    "Payment successful",
+                    "Your group labour booking payment was completed successfully.",
+                    Map.of(
+                            "requestId", request.getId(),
+                            "requestCode", request.getRequestCode(),
                             "paymentCode", payment.getPaymentCode()
                     )
             );
@@ -401,6 +441,23 @@ public class PaymentLifecycleService {
                             "paymentCode", payment.getPaymentCode()
                     )
             );
+            return;
+        }
+
+        if (payment.getPayableType() == PayableType.BOOKING_REQUEST) {
+            BookingRequestEntity request = bookingRequestRepository.findById(payment.getPayableId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Linked booking request not found"));
+            notificationService.notifyUser(
+                    payment.getPayerUserId(),
+                    "BOOKING_PAYMENT_FAILED",
+                    "Payment not completed",
+                    "Your group labour booking payment could not be completed.",
+                    Map.of(
+                            "requestId", request.getId(),
+                            "requestCode", request.getRequestCode(),
+                            "paymentCode", payment.getPaymentCode()
+                    )
+            );
         }
     }
 
@@ -432,6 +489,21 @@ public class PaymentLifecycleService {
                 insertBookingStatusHistory(booking.getId(), oldStatus.name(), BookingLifecycleStatus.PAYMENT_COMPLETED.name(), payment.getPayerUserId(), "Payment completed");
             }
             bookingRepository.save(booking);
+            return;
+        }
+
+        if (payment.getPayableType() == PayableType.BOOKING_REQUEST) {
+            for (BookingEntity booking : requestBookings(payment.getPayableId())) {
+                BookingLifecycleStatus oldStatus = booking.getBookingStatus();
+                booking.setPaymentStatus(PayablePaymentStatus.PAID);
+                if (oldStatus == BookingLifecycleStatus.CREATED
+                        || oldStatus == BookingLifecycleStatus.ACCEPTED
+                        || oldStatus == BookingLifecycleStatus.PAYMENT_PENDING) {
+                    booking.setBookingStatus(BookingLifecycleStatus.PAYMENT_COMPLETED);
+                    insertBookingStatusHistory(booking.getId(), oldStatus.name(), BookingLifecycleStatus.PAYMENT_COMPLETED.name(), payment.getPayerUserId(), "Group booking payment completed");
+                }
+                bookingRepository.save(booking);
+            }
         }
     }
 
@@ -499,6 +571,18 @@ public class PaymentLifecycleService {
                 booking.setBookingStatus(BookingLifecycleStatus.PAYMENT_PENDING);
             }
             bookingRepository.save(booking);
+            return;
+        }
+
+        if (payment.getPayableType() == PayableType.BOOKING_REQUEST) {
+            List<BookingEntity> bookings = requestBookings(payment.getPayableId());
+            for (BookingEntity booking : bookings) {
+                booking.setPaymentStatus("FAILED".equalsIgnoreCase(targetPaymentStatus) ? PayablePaymentStatus.FAILED : PayablePaymentStatus.PENDING);
+                if (booking.getBookingStatus() == BookingLifecycleStatus.CREATED || booking.getBookingStatus() == BookingLifecycleStatus.ACCEPTED) {
+                    booking.setBookingStatus(BookingLifecycleStatus.PAYMENT_PENDING);
+                }
+            }
+            bookingRepository.saveAll(bookings);
         }
     }
 
@@ -533,6 +617,23 @@ public class PaymentLifecycleService {
                 insertBookingStatusHistory(booking.getId(), oldStatus.name(), BookingLifecycleStatus.CANCELLED.name(), payment.getPayerUserId(), reason);
             }
             bookingRepository.save(booking);
+            return;
+        }
+
+        if (payment.getPayableType() == PayableType.BOOKING_REQUEST) {
+            List<BookingEntity> bookings = requestBookings(payment.getPayableId());
+            for (BookingEntity booking : bookings) {
+                if (booking.getPaymentStatus() == PayablePaymentStatus.PAID || booking.getPaymentStatus() == PayablePaymentStatus.REFUNDED) {
+                    continue;
+                }
+                BookingLifecycleStatus oldStatus = booking.getBookingStatus();
+                booking.setPaymentStatus(PayablePaymentStatus.FAILED);
+                if (oldStatus != BookingLifecycleStatus.CANCELLED) {
+                    booking.setBookingStatus(BookingLifecycleStatus.CANCELLED);
+                    insertBookingStatusHistory(booking.getId(), oldStatus.name(), BookingLifecycleStatus.CANCELLED.name(), payment.getPayerUserId(), reason);
+                }
+            }
+            bookingRepository.saveAll(bookings);
         }
     }
 
@@ -599,6 +700,10 @@ public class PaymentLifecycleService {
             throw new ResourceNotFoundException("Payment not found");
         }
         return payment;
+    }
+
+    private List<BookingEntity> requestBookings(Long bookingRequestId) {
+        return bookingRepository.findByBookingRequestIdOrderByIdAsc(bookingRequestId);
     }
 
     private PaymentStatusResponse toStatusResponse(
@@ -746,6 +851,12 @@ public class PaymentLifecycleService {
                     || booking.getPaymentStatus() == PayablePaymentStatus.FAILED
                     || booking.getPaymentStatus() == PayablePaymentStatus.REFUNDED;
         }
+        if (payment.getPayableType() == PayableType.BOOKING_REQUEST) {
+            return requestBookings(payment.getPayableId()).stream().allMatch(booking ->
+                    booking.getBookingStatus() == BookingLifecycleStatus.CANCELLED
+                            || booking.getPaymentStatus() == PayablePaymentStatus.FAILED
+                            || booking.getPaymentStatus() == PayablePaymentStatus.REFUNDED);
+        }
         return false;
     }
 
@@ -765,6 +876,11 @@ public class PaymentLifecycleService {
                     .orElseThrow(() -> new ResourceNotFoundException("Linked booking not found"));
             return booking.getPaymentStatus() == PayablePaymentStatus.PAID
                     || booking.getPaymentStatus() == PayablePaymentStatus.REFUNDED;
+        }
+        if (payment.getPayableType() == PayableType.BOOKING_REQUEST) {
+            return requestBookings(payment.getPayableId()).stream().allMatch(booking ->
+                    booking.getPaymentStatus() == PayablePaymentStatus.PAID
+                            || booking.getPaymentStatus() == PayablePaymentStatus.REFUNDED);
         }
         return false;
     }

@@ -9,6 +9,7 @@ public record PushTokenRegisterRequest(
         String platform,
         @NotBlank(message = "pushProvider is required")
         String pushProvider,
+        String appContext,
         @NotBlank(message = "pushToken is required")
         String pushToken
 ) {

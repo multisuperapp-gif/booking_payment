@@ -2,6 +2,10 @@ package com.msa.booking.payment.notification.service.impl;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.firebase.messaging.AndroidConfig;
+import com.google.firebase.messaging.AndroidNotification;
+import com.google.firebase.messaging.ApnsConfig;
+import com.google.firebase.messaging.Aps;
 import com.google.firebase.messaging.FirebaseMessaging;
 import com.google.firebase.messaging.Message;
 import com.google.firebase.messaging.Notification;
@@ -25,6 +29,11 @@ import java.util.Map;
 @Service
 public class NotificationServiceImpl implements NotificationService {
     private static final Logger LOGGER = LoggerFactory.getLogger(NotificationServiceImpl.class);
+    private static final String INCOMING_BOOKING_CHANNEL_ID = "incoming_bookings";
+    private static final String INCOMING_BOOKING_SOUND_NAME = "incoming_booking_alert";
+    private static final String INCOMING_BOOKING_SOUND_FILE = "incoming_booking_alert.wav";
+    private static final String USER_APP_CONTEXT = "USER_APP";
+    private static final String PROVIDER_APP_CONTEXT = "PROVIDER_APP";
 
     private final NotificationRepository notificationRepository;
     private final NotificationDeliveryRepository notificationDeliveryRepository;
@@ -56,7 +65,9 @@ public class NotificationServiceImpl implements NotificationService {
         entity.setStatus("PENDING");
         NotificationEntity saved = notificationRepository.save(entity);
 
-        List<PushNotificationTokenEntity> pushTokens = pushNotificationTokenRepository.findByUserIdAndActiveTrue(userId);
+        String targetAppContext = targetAppContext(type, payload);
+        List<PushNotificationTokenEntity> pushTokens =
+                pushNotificationTokenRepository.findByUserIdAndAppContextAndActiveTrue(userId, targetAppContext);
         if (pushTokens.isEmpty()) {
             saved.setStatus("FAILED");
             notificationRepository.save(saved);
@@ -72,12 +83,33 @@ public class NotificationServiceImpl implements NotificationService {
             delivery.setDeliveryStatus("PENDING");
             try {
                 Map<String, String> data = buildDataPayload(saved.getId(), type, payload);
+                Message.Builder messageBuilder = Message.builder()
+                        .setToken(pushToken.getPushToken())
+                        .setNotification(Notification.builder().setTitle(title).setBody(body).build())
+                        .putAllData(data);
+                if (isIncomingBookingRequest(type)) {
+                    messageBuilder
+                            .setAndroidConfig(AndroidConfig.builder()
+                                    .setPriority(AndroidConfig.Priority.HIGH)
+                                    .setTtl(300_000L)
+                                    .setNotification(AndroidNotification.builder()
+                                            .setChannelId(INCOMING_BOOKING_CHANNEL_ID)
+                                            .setSound(INCOMING_BOOKING_SOUND_NAME)
+                                            .setPriority(AndroidNotification.Priority.MAX)
+                                            .setVisibility(AndroidNotification.Visibility.PUBLIC)
+                                            .setDefaultVibrateTimings(true)
+                                            .build())
+                                    .build())
+                            .setApnsConfig(ApnsConfig.builder()
+                                    .putHeader("apns-priority", "10")
+                                    .setAps(Aps.builder()
+                                            .setSound(INCOMING_BOOKING_SOUND_FILE)
+                                            .setCategory("INCOMING_BOOKING")
+                                            .build())
+                                    .build());
+                }
                 String messageId = FirebaseMessaging.getInstance().send(
-                        Message.builder()
-                                .setToken(pushToken.getPushToken())
-                                .setNotification(Notification.builder().setTitle(title).setBody(body).build())
-                                .putAllData(data)
-                                .build()
+                        messageBuilder.build()
                 );
                 delivery.setDeliveryStatus("SENT");
                 delivery.setProviderMessageId(messageId);
@@ -110,6 +142,12 @@ public class NotificationServiceImpl implements NotificationService {
         Map<String, String> data = new LinkedHashMap<>();
         data.put("type", type == null ? "" : type);
         data.put("notificationId", String.valueOf(notificationId));
+        if (isIncomingBookingRequest(type)) {
+            data.put("priority", "high");
+            data.put("notificationChannelId", INCOMING_BOOKING_CHANNEL_ID);
+            data.put("sound", INCOMING_BOOKING_SOUND_NAME);
+            data.put("requiresProviderAction", "true");
+        }
         if (payload != null) {
             payload.forEach((key, value) -> {
                 if (key == null || key.isBlank() || value == null) {
@@ -119,5 +157,28 @@ public class NotificationServiceImpl implements NotificationService {
             });
         }
         return data;
+    }
+
+    private boolean isIncomingBookingRequest(String type) {
+        return "BOOKING_REQUEST_NEW".equalsIgnoreCase(type);
+    }
+
+    private String targetAppContext(String type, Map<String, Object> payload) {
+        Object explicitContext = payload == null ? null : payload.get("appContext");
+        if (explicitContext != null && !String.valueOf(explicitContext).isBlank()) {
+            String normalizedContext = String.valueOf(explicitContext).trim().toUpperCase();
+            if (USER_APP_CONTEXT.equals(normalizedContext) || PROVIDER_APP_CONTEXT.equals(normalizedContext)) {
+                return normalizedContext;
+            }
+        }
+        String normalized = type == null ? "" : type.trim().toUpperCase();
+        if (isIncomingBookingRequest(normalized)
+                || normalized.endsWith("_PROVIDER")
+                || "BOOKING_ASSIGNED".equals(normalized)
+                || "BOOKING_MUTUAL_CANCEL_OTP".equals(normalized)
+                || "SHOP_ORDER_RECEIVED".equals(normalized)) {
+            return PROVIDER_APP_CONTEXT;
+        }
+        return USER_APP_CONTEXT;
     }
 }

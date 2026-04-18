@@ -25,7 +25,9 @@ public interface BookingPolicyService {
 
     BigDecimal postStartCancellationPenaltyAmount();
 
-    BigDecimal labourPlatformFee();
+    BigDecimal labourPlatformFeePercent();
+
+    BigDecimal labourBookingChargeAmount(BigDecimal labourQuotedAmount);
 
     BigDecimal servicePlatformFee();
 

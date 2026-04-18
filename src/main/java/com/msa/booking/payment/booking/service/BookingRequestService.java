@@ -8,4 +8,6 @@ public interface BookingRequestService {
     BookingRequestData createRequest(CreateBookingRequest request);
 
     ExpireBookingRequestsResponse expireTimedOutRequests();
+
+    void cancelOpenRequest(Long actingUserId, Long requestId, String reason);
 }

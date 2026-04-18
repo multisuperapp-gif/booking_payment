@@ -27,6 +27,9 @@ public class PushNotificationTokenEntity {
     @Column(name = "push_provider", nullable = false, length = 20)
     private String pushProvider;
 
+    @Column(name = "app_context", nullable = false, length = 30)
+    private String appContext;
+
     @Column(name = "push_token", nullable = false, unique = true, length = 255)
     private String pushToken;
 

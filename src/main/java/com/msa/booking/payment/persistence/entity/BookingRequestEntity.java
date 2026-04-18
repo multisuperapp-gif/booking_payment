@@ -82,6 +82,9 @@ public class BookingRequestEntity {
     @Column(name = "search_longitude", precision = 10, scale = 7)
     private BigDecimal searchLongitude;
 
+    @Column(name = "requested_provider_count", nullable = false)
+    private Integer requestedProviderCount = 1;
+
     @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
     private LocalDateTime createdAt;
 

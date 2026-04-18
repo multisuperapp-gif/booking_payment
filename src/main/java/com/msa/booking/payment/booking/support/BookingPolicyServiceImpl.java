@@ -5,6 +5,7 @@ import com.msa.booking.payment.persistence.repository.AppSettingRepository;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 
 @Service
 public class BookingPolicyServiceImpl implements BookingPolicyService {
@@ -16,7 +17,7 @@ public class BookingPolicyServiceImpl implements BookingPolicyService {
 
     @Override
     public int labourDirectRequestTimeoutSeconds() {
-        return resolveInt(BookingPaymentSettingsKeys.LABOUR_DIRECT_REQUEST_TIMEOUT_SECONDS, 30);
+        return resolveInt(BookingPaymentSettingsKeys.LABOUR_DIRECT_REQUEST_TIMEOUT_SECONDS, 45);
     }
 
     @Override
@@ -70,8 +71,18 @@ public class BookingPolicyServiceImpl implements BookingPolicyService {
     }
 
     @Override
-    public BigDecimal labourPlatformFee() {
-        return resolveAmount(BookingPaymentSettingsKeys.PLATFORM_FEE_LABOUR, BigDecimal.ZERO);
+    public BigDecimal labourPlatformFeePercent() {
+        return resolveAmount(BookingPaymentSettingsKeys.PLATFORM_FEE_LABOUR, new BigDecimal("5.00"));
+    }
+
+    @Override
+    public BigDecimal labourBookingChargeAmount(BigDecimal labourQuotedAmount) {
+        if (labourQuotedAmount == null || labourQuotedAmount.signum() <= 0) {
+            return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        }
+        return labourQuotedAmount
+                .multiply(labourPlatformFeePercent())
+                .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
     }
 
     @Override

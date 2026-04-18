@@ -15,6 +15,8 @@ import java.util.Locale;
 
 @Service
 public class PushTokenServiceImpl implements PushTokenService {
+    private static final String DEFAULT_APP_CONTEXT = "USER_APP";
+
     private final PushNotificationTokenRepository pushNotificationTokenRepository;
 
     public PushTokenServiceImpl(PushNotificationTokenRepository pushNotificationTokenRepository) {
@@ -30,6 +32,7 @@ public class PushTokenServiceImpl implements PushTokenService {
         entity.setUserDeviceId(request.userDeviceId());
         entity.setPlatform(request.platform().trim().toUpperCase(Locale.ROOT));
         entity.setPushProvider(request.pushProvider().trim().toUpperCase(Locale.ROOT));
+        entity.setAppContext(normalizeAppContext(request.appContext()));
         entity.setPushToken(request.pushToken().trim());
         entity.setActive(true);
         entity.setLastSeenAt(LocalDateTime.now());
@@ -56,9 +59,21 @@ public class PushTokenServiceImpl implements PushTokenService {
                 entity.getUserDeviceId(),
                 entity.getPlatform(),
                 entity.getPushProvider(),
+                entity.getAppContext(),
                 entity.getPushToken(),
                 entity.isActive(),
                 entity.getLastSeenAt()
         );
+    }
+
+    private String normalizeAppContext(String appContext) {
+        if (appContext == null || appContext.isBlank()) {
+            return DEFAULT_APP_CONTEXT;
+        }
+        String normalized = appContext.trim().toUpperCase(Locale.ROOT);
+        if (!"USER_APP".equals(normalized) && !"PROVIDER_APP".equals(normalized)) {
+            throw new BadRequestException("Unsupported app context.");
+        }
+        return normalized;
     }
 }

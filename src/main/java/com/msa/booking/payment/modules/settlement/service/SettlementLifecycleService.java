@@ -15,6 +15,7 @@ import com.msa.booking.payment.persistence.repository.SettlementCycleRepository;
 import com.msa.booking.payment.persistence.repository.SettlementLineItemRepository;
 import com.msa.booking.payment.persistence.repository.SettlementRepository;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -31,6 +32,7 @@ public class SettlementLifecycleService {
     private static final String LINE_GROSS = "GROSS";
     private static final String LINE_COMMISSION = "COMMISSION";
     private static final String LINE_REFUND = "REFUND";
+    private static final String LINE_ADJUSTMENT = "ADJUSTMENT";
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(2);
 
     private final SettlementCycleRepository settlementCycleRepository;
@@ -60,6 +62,11 @@ public class SettlementLifecycleService {
             return;
         }
         if (payment.getPayableType() == PayableType.BOOKING) {
+            BookingEntity booking = bookingRepository.findById(payment.getPayableId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Linked booking not found"));
+            if (booking.getBookingType() == com.msa.booking.payment.domain.enums.BookingFlowType.LABOUR) {
+                return;
+            }
             recordBookingSettlement(payment);
         }
     }
@@ -74,8 +81,44 @@ public class SettlementLifecycleService {
             return;
         }
         if (payment.getPayableType() == PayableType.BOOKING) {
+            BookingEntity booking = bookingRepository.findById(payment.getPayableId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Linked booking not found"));
+            if (booking.getBookingType() == com.msa.booking.payment.domain.enums.BookingFlowType.LABOUR) {
+                return;
+            }
             recordBookingRefund(payment, refundAmount);
         }
+    }
+
+    @Transactional
+    public void recordLabourCancellationShare(BookingEntity booking, BigDecimal shareAmount, String remark) {
+        if (booking == null || shareAmount == null || shareAmount.signum() <= 0) {
+            return;
+        }
+        if (settlementLineItemRepository.existsBySourceTypeAndSourceIdAndLineType(
+                SOURCE_BOOKING,
+                booking.getId(),
+                LINE_ADJUSTMENT
+        )) {
+            return;
+        }
+        SettlementCycleEntity cycle = resolveDailyCycle(LocalDateTime.now());
+        SettlementEntity settlement = resolveSettlement(
+                cycle.getId(),
+                resolveBookingBeneficiaryType(booking.getProviderEntityType()),
+                booking.getProviderEntityId()
+        );
+        settlement.setAdjustmentAmount(amountOrZero(settlement.getAdjustmentAmount()).add(shareAmount));
+        settlement.setNetAmount(amountOrZero(settlement.getNetAmount()).add(shareAmount));
+        settlementRepository.save(settlement);
+        saveLineItem(
+                settlement.getId(),
+                SOURCE_BOOKING,
+                booking.getId(),
+                LINE_ADJUSTMENT,
+                shareAmount.setScale(2, RoundingMode.HALF_UP),
+                remark == null || remark.isBlank() ? booking.getBookingCode() : remark
+        );
     }
 
     private void recordOrderSettlement(PaymentEntity payment) {

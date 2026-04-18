@@ -56,9 +56,10 @@ public class BookingRequestServiceImpl implements BookingRequestService {
     @Transactional
     public BookingRequestData createRequest(CreateBookingRequest request) {
         validateRequest(request);
-        int timeoutSeconds = resolveTimeoutSeconds(request.bookingType());
+        int timeoutSeconds = resolveTimeoutSeconds(request.bookingType(), request.requestMode());
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime expiresAt = now.plusSeconds(timeoutSeconds);
+        int requestedProviderCount = normalizeRequestedProviderCount(request);
 
         BookingRequestEntity entity = new BookingRequestEntity();
         entity.setRequestCode(generateRequestCode());
@@ -78,6 +79,7 @@ public class BookingRequestServiceImpl implements BookingRequestService {
         entity.setPriceMaxAmount(request.priceMaxAmount());
         entity.setSearchLatitude(request.searchLatitude());
         entity.setSearchLongitude(request.searchLongitude());
+        entity.setRequestedProviderCount(requestedProviderCount);
         BookingRequestEntity savedRequest = bookingRequestRepository.save(entity);
 
         List<BookingRequestCandidateEntity> candidateEntities = buildCandidates(savedRequest.getId(), request, now, expiresAt);
@@ -123,6 +125,36 @@ public class BookingRequestServiceImpl implements BookingRequestService {
         return new ExpireBookingRequestsResponse(openRequests.size(), expiredCandidates);
     }
 
+    @Override
+    @Transactional
+    public void cancelOpenRequest(Long actingUserId, Long requestId, String reason) {
+        BookingRequestEntity request = bookingRequestRepository.findById(requestId)
+                .orElseThrow(() -> new BadRequestException("Booking request not found."));
+        if (!actingUserId.equals(request.getUserId())) {
+            throw new BadRequestException("Authenticated user cannot cancel this booking request.");
+        }
+        if (request.getRequestStatus() != BookingRequestStatus.OPEN) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        request.setRequestStatus(BookingRequestStatus.CANCELLED);
+        List<BookingRequestCandidateEntity> pendingCandidates = bookingRequestCandidateRepository
+                .findByRequestIdAndCandidateStatus(request.getId(), BookingRequestCandidateStatus.PENDING);
+        for (BookingRequestCandidateEntity candidate : pendingCandidates) {
+            candidate.setCandidateStatus(BookingRequestCandidateStatus.CLOSED);
+            candidate.setRespondedAt(now);
+        }
+        bookingRequestCandidateRepository.saveAll(pendingCandidates);
+        bookingRequestRepository.save(request);
+        notificationService.notifyUser(
+                request.getUserId(),
+                "BOOKING_REQUEST_CANCELLED",
+                "Booking request cancelled",
+                reason == null || reason.isBlank() ? "Your booking request was cancelled." : reason,
+                java.util.Map.of("requestId", request.getId(), "requestCode", request.getRequestCode())
+        );
+    }
+
     private void validateRequest(CreateBookingRequest request) {
         if (request.requestMode() == BookingRequestMode.DIRECT) {
             if (request.targetProviderEntityType() == null || request.targetProviderEntityId() == null) {
@@ -156,14 +188,25 @@ public class BookingRequestServiceImpl implements BookingRequestService {
         };
     }
 
-    private int resolveTimeoutSeconds(BookingFlowType bookingType) {
+    private int resolveTimeoutSeconds(BookingFlowType bookingType, BookingRequestMode requestMode) {
         if (bookingType == BookingFlowType.LABOUR) {
+            if (requestMode == BookingRequestMode.BROADCAST) {
+                return 60;
+            }
             return bookingPolicyService.labourDirectRequestTimeoutSeconds();
         }
         if (bookingType == BookingFlowType.SERVICE) {
             return bookingPolicyService.serviceDirectRequestTimeoutSeconds();
         }
         return DEFAULT_DIRECT_TIMEOUT_SECONDS;
+    }
+
+    private int normalizeRequestedProviderCount(CreateBookingRequest request) {
+        if (request.requestMode() == BookingRequestMode.DIRECT) {
+            return 1;
+        }
+        int requestedCount = request.requestedProviderCount() == null ? 1 : request.requestedProviderCount();
+        return Math.max(1, Math.min(7, requestedCount));
     }
 
     private List<BookingRequestCandidateEntity> buildCandidates(
@@ -252,18 +295,25 @@ public class BookingRequestServiceImpl implements BookingRequestService {
             if (providerUserId == null) {
                 continue;
             }
+            java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+            payload.put("requestId", request.getId());
+            payload.put("requestCode", request.getRequestCode());
+            payload.put("candidateId", candidate.getId());
+            payload.put("providerEntityType", candidate.getProviderEntityType().name());
+            payload.put("providerEntityId", candidate.getProviderEntityId());
+            payload.put("bookingType", request.getBookingType().name());
+            payload.put("requestMode", request.getRequestMode().name());
+            payload.put("labourPricingModel", request.getLabourPricingModel() == null ? "" : request.getLabourPricingModel());
+            payload.put("quotedPriceAmount", candidate.getQuotedPriceAmount() == null ? "" : candidate.getQuotedPriceAmount());
+            payload.put("distanceKm", candidate.getDistanceKm() == null ? "" : candidate.getDistanceKm());
+            payload.put("expiresAt", request.getExpiresAt());
+            payload.put("appContext", "PROVIDER_APP");
             notificationService.notifyUser(
                     providerUserId,
                     "BOOKING_REQUEST_NEW",
-                    "New booking request",
-                    "A customer is waiting for your response. Accept the request if you are available.",
-                    java.util.Map.of(
-                            "requestId", request.getId(),
-                            "requestCode", request.getRequestCode(),
-                            "candidateId", candidate.getId(),
-                            "providerEntityType", candidate.getProviderEntityType().name(),
-                            "providerEntityId", candidate.getProviderEntityId()
-                    )
+                    "New Booking Order!",
+                    "Order #" + request.getRequestCode() + " is waiting for your response.",
+                    payload
             );
         }
     }

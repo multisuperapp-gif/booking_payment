@@ -30,6 +30,7 @@ public record CreateBookingRequest(
         BigDecimal priceMaxAmount,
         BigDecimal searchLatitude,
         BigDecimal searchLongitude,
+        Integer requestedProviderCount,
         @Valid
         List<BookingRequestCandidateInput> candidates
 ) {

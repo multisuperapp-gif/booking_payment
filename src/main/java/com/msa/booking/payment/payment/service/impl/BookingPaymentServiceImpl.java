@@ -11,12 +11,14 @@ import com.msa.booking.payment.domain.enums.PayableType;
 import com.msa.booking.payment.domain.enums.PaymentLifecycleStatus;
 import com.msa.booking.payment.persistence.entity.BookingActionOtpEntity;
 import com.msa.booking.payment.persistence.entity.BookingEntity;
+import com.msa.booking.payment.persistence.entity.BookingRequestEntity;
 import com.msa.booking.payment.persistence.entity.PaymentEntity;
 import com.msa.booking.payment.persistence.entity.PaymentAttemptEntity;
 import com.msa.booking.payment.persistence.entity.PaymentTransactionEntity;
 import com.msa.booking.payment.persistence.repository.BookingRepository;
 import com.msa.booking.payment.persistence.repository.BookingSupportRepository;
 import com.msa.booking.payment.persistence.repository.BookingActionOtpRepository;
+import com.msa.booking.payment.persistence.repository.BookingRequestRepository;
 import com.msa.booking.payment.persistence.repository.PaymentAttemptRepository;
 import com.msa.booking.payment.persistence.repository.PaymentRepository;
 import com.msa.booking.payment.payment.dto.BookingPaymentData;
@@ -47,6 +49,7 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
     private final PaymentTransactionRepository paymentTransactionRepository;
     private final BookingSupportRepository bookingSupportRepository;
     private final BookingActionOtpRepository bookingActionOtpRepository;
+    private final BookingRequestRepository bookingRequestRepository;
     private final BookingPolicyService bookingPolicyService;
     private final BookingHistoryService bookingHistoryService;
     private final NotificationService notificationService;
@@ -59,6 +62,7 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
             PaymentTransactionRepository paymentTransactionRepository,
             BookingSupportRepository bookingSupportRepository,
             BookingActionOtpRepository bookingActionOtpRepository,
+            BookingRequestRepository bookingRequestRepository,
             BookingPolicyService bookingPolicyService,
             BookingHistoryService bookingHistoryService,
             NotificationService notificationService,
@@ -70,6 +74,7 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
         this.paymentTransactionRepository = paymentTransactionRepository;
         this.bookingSupportRepository = bookingSupportRepository;
         this.bookingActionOtpRepository = bookingActionOtpRepository;
+        this.bookingRequestRepository = bookingRequestRepository;
         this.bookingPolicyService = bookingPolicyService;
         this.bookingHistoryService = bookingHistoryService;
         this.notificationService = notificationService;
@@ -79,6 +84,12 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
     @Override
     @Transactional
     public BookingPaymentData initiate(InitiateBookingPaymentRequest request) {
+        if (request.bookingRequestId() != null) {
+            return initiateForBookingRequest(request.bookingRequestId());
+        }
+        if (request.bookingId() == null) {
+            throw new BadRequestException("Booking id is required.");
+        }
         BookingEntity booking = loadBooking(request.bookingId());
         if (booking.getBookingStatus() != BookingLifecycleStatus.PAYMENT_PENDING) {
             throw new BadRequestException("Payment can be initiated only when booking is waiting for payment.");
@@ -131,6 +142,64 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
                 )
         );
         return toData(booking, payment, gatewayOrder.orderId(), gatewayOrder.keyId(), gatewayOrder.amountInPaise());
+    }
+
+    private BookingPaymentData initiateForBookingRequest(Long bookingRequestId) {
+        BookingRequestEntity bookingRequest = bookingRequestRepository.findById(bookingRequestId)
+                .orElseThrow(() -> new BadRequestException("Booking request not found."));
+        List<BookingEntity> acceptedBookings = payableRequestBookings(bookingRequestId);
+        if (acceptedBookings.isEmpty()) {
+            throw new BadRequestException("No accepted labour booking is waiting for payment.");
+        }
+
+        PaymentEntity payment = paymentRepository.findByPayableTypeAndPayableId(PayableType.BOOKING_REQUEST, bookingRequestId)
+                .orElseGet(() -> createRequestPayment(bookingRequest, acceptedBookings));
+        if (payment.getPaymentStatus() == PaymentLifecycleStatus.SUCCESS) {
+            throw new BadRequestException("Payment is already completed for this group booking request.");
+        }
+        payment.setAmount(resolveGroupBookingRequestAmount(acceptedBookings));
+        paymentRepository.save(payment);
+        PaymentAttemptEntity latestAttempt = paymentAttemptRepository
+                .findTopByPaymentIdAndGatewayNameOrderByIdDesc(payment.getId(), "RAZORPAY")
+                .orElse(null);
+        if (isReusablePendingAttempt(latestAttempt)) {
+            payment.setPaymentStatus(PaymentLifecycleStatus.PENDING);
+            paymentRepository.save(payment);
+            markRequestBookingsPaymentState(acceptedBookings, PayablePaymentStatus.PENDING);
+            return toRequestData(bookingRequest, acceptedBookings, payment, latestAttempt.getGatewayOrderId(), razorpayGatewayService.configuredKeyId(), amountInPaise(payment.getAmount()));
+        }
+        RazorpayGatewayService.RazorpayOrderData gatewayOrder = razorpayGatewayService.createOrder(
+                payment.getPaymentCode(),
+                payment.getAmount(),
+                payment.getCurrencyCode()
+        );
+        payment.setPaymentStatus(PaymentLifecycleStatus.PENDING);
+        paymentRepository.save(payment);
+
+        PaymentAttemptEntity attempt = new PaymentAttemptEntity();
+        attempt.setPaymentId(payment.getId());
+        attempt.setGatewayName("RAZORPAY");
+        attempt.setGatewayOrderId(gatewayOrder.orderId());
+        attempt.setAttemptStatus(PaymentAttemptStatus.PENDING);
+        attempt.setRequestedAmount(payment.getAmount());
+        attempt.setResponseCode(gatewayOrder.status());
+        attempt.setAttemptedAt(LocalDateTime.now());
+        paymentAttemptRepository.save(attempt);
+
+        markRequestBookingsPaymentState(acceptedBookings, PayablePaymentStatus.PENDING);
+        notificationService.notifyUser(
+                bookingRequest.getUserId(),
+                "BOOKING_PAYMENT_PENDING",
+                "Complete your payment",
+                "Your group labour booking is reserved. Complete payment to confirm accepted labour.",
+                java.util.Map.of(
+                        "requestId", bookingRequest.getId(),
+                        "requestCode", bookingRequest.getRequestCode(),
+                        "paymentCode", payment.getPaymentCode(),
+                        "acceptedCount", acceptedBookings.size()
+                )
+        );
+        return toRequestData(bookingRequest, acceptedBookings, payment, gatewayOrder.orderId(), gatewayOrder.keyId(), gatewayOrder.amountInPaise());
     }
 
     @Override
@@ -208,7 +277,11 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
                     "BOOKING_PAYMENT_SUCCESS",
                     "Payment received",
                     "User payment is complete. Contact details are now available.",
-                    java.util.Map.of("bookingId", booking.getId(), "bookingCode", booking.getBookingCode())
+                    java.util.Map.of(
+                            "bookingId", booking.getId(),
+                            "bookingCode", booking.getBookingCode(),
+                            "appContext", "PROVIDER_APP"
+                    )
             );
         }
         return toData(booking, payment, request.razorpayOrderId(), null, amountInPaise(payment.getAmount()));
@@ -274,6 +347,50 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
         return paymentRepository.save(payment);
     }
 
+    private PaymentEntity createRequestPayment(BookingRequestEntity bookingRequest, List<BookingEntity> acceptedBookings) {
+        PaymentEntity payment = new PaymentEntity();
+        payment.setPaymentCode("PAY-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase());
+        payment.setPayableType(PayableType.BOOKING_REQUEST);
+        payment.setPayableId(bookingRequest.getId());
+        payment.setPayerUserId(bookingRequest.getUserId());
+        payment.setPaymentStatus(PaymentLifecycleStatus.INITIATED);
+        payment.setAmount(resolveGroupBookingRequestAmount(acceptedBookings));
+        payment.setCurrencyCode("INR");
+        payment.setInitiatedAt(LocalDateTime.now());
+        return paymentRepository.save(payment);
+    }
+
+    private BigDecimal resolveGroupBookingRequestAmount(List<BookingEntity> acceptedBookings) {
+        BigDecimal totalCharge = BigDecimal.ZERO;
+        for (BookingEntity booking : acceptedBookings) {
+            totalCharge = totalCharge.add(prepareLabourBookingCharge(booking));
+        }
+        if (!acceptedBookings.isEmpty()) {
+            bookingRepository.saveAll(acceptedBookings);
+        }
+        return totalCharge;
+    }
+
+    private List<BookingEntity> payableRequestBookings(Long bookingRequestId) {
+        return bookingRepository.findByBookingRequestIdOrderByIdAsc(bookingRequestId).stream()
+                .filter(booking -> booking.getBookingStatus() == BookingLifecycleStatus.PAYMENT_PENDING)
+                .filter(booking -> booking.getPaymentStatus() == PayablePaymentStatus.UNPAID
+                        || booking.getPaymentStatus() == PayablePaymentStatus.PENDING
+                        || booking.getPaymentStatus() == PayablePaymentStatus.FAILED)
+                .toList();
+    }
+
+    private void markRequestBookingsPaymentState(List<BookingEntity> bookings, PayablePaymentStatus paymentStatus) {
+        for (BookingEntity booking : bookings) {
+            booking.setPaymentStatus(paymentStatus);
+            if (booking.getBookingStatus() == BookingLifecycleStatus.CREATED
+                    || booking.getBookingStatus() == BookingLifecycleStatus.ACCEPTED) {
+                booking.setBookingStatus(BookingLifecycleStatus.PAYMENT_PENDING);
+            }
+        }
+        bookingRepository.saveAll(bookings);
+    }
+
     private void prepareStartWorkOtp(BookingEntity booking) {
         List<BookingActionOtpEntity> openOtps = bookingActionOtpRepository
                 .findByBookingIdAndOtpPurposeAndOtpStatus(
@@ -300,13 +417,24 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
 
     private BigDecimal resolvePaymentAmount(BookingEntity booking) {
         BigDecimal subtotal = booking.getSubtotalAmount() == null ? BigDecimal.ZERO : booking.getSubtotalAmount();
-        BigDecimal platformFee = booking.getBookingType() == BookingFlowType.LABOUR
-                ? bookingPolicyService.labourPlatformFee()
-                : bookingPolicyService.servicePlatformFee();
+        if (booking.getBookingType() == BookingFlowType.LABOUR) {
+            BigDecimal bookingCharge = prepareLabourBookingCharge(booking);
+            bookingRepository.save(booking);
+            return bookingCharge;
+        }
+        BigDecimal platformFee = bookingPolicyService.servicePlatformFee();
         booking.setPlatformFeeAmount(platformFee);
         booking.setTotalEstimatedAmount(subtotal.add(platformFee));
         bookingRepository.save(booking);
         return booking.getTotalEstimatedAmount();
+    }
+
+    private BigDecimal prepareLabourBookingCharge(BookingEntity booking) {
+        BigDecimal subtotal = booking.getSubtotalAmount() == null ? BigDecimal.ZERO : booking.getSubtotalAmount();
+        BigDecimal bookingCharge = bookingPolicyService.labourBookingChargeAmount(subtotal);
+        booking.setPlatformFeeAmount(bookingCharge);
+        booking.setTotalEstimatedAmount(subtotal);
+        return bookingCharge;
     }
 
     private BookingEntity loadBooking(Long bookingId) {
@@ -354,6 +482,31 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
                 payment.getPaymentStatus(),
                 booking.getBookingStatus(),
                 booking.getPaymentStatus(),
+                payment.getAmount(),
+                payment.getCurrencyCode(),
+                amountInPaise
+        );
+    }
+
+    private BookingPaymentData toRequestData(
+            BookingRequestEntity bookingRequest,
+            List<BookingEntity> acceptedBookings,
+            PaymentEntity payment,
+            String razorpayOrderId,
+            String razorpayKeyId,
+            Long amountInPaise
+    ) {
+        BookingEntity referenceBooking = acceptedBookings.isEmpty() ? null : acceptedBookings.getFirst();
+        return new BookingPaymentData(
+                referenceBooking == null ? bookingRequest.getId() : referenceBooking.getId(),
+                referenceBooking == null ? bookingRequest.getRequestCode() : referenceBooking.getBookingCode(),
+                payment.getPaymentCode(),
+                "RAZORPAY",
+                razorpayKeyId,
+                razorpayOrderId,
+                payment.getPaymentStatus(),
+                referenceBooking == null ? BookingLifecycleStatus.PAYMENT_PENDING : referenceBooking.getBookingStatus(),
+                referenceBooking == null ? PayablePaymentStatus.PENDING : referenceBooking.getPaymentStatus(),
                 payment.getAmount(),
                 payment.getCurrencyCode(),
                 amountInPaise

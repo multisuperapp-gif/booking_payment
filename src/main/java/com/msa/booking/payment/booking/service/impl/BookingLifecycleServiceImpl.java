@@ -394,6 +394,13 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
         }
         PaymentEntity payment = paymentRepository.findByPayableTypeAndPayableId(PayableType.BOOKING, booking.getId())
                 .orElse(null);
+        BigDecimal labourShare = amountOrZero(booking.getPlatformFeeAmount())
+                .divide(BigDecimal.valueOf(2), 2, java.math.RoundingMode.HALF_UP);
+        settlementLifecycleService.recordLabourCancellationShare(
+                booking,
+                labourShare,
+                "50% labour share from confirmed booking cancellation"
+        );
         if (payment == null) {
             return;
         }
@@ -403,9 +410,13 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
                 RefundLifecycleStatus.REJECTED,
                 payment.getAmount(),
                 BigDecimal.ZERO,
-                "User cancelled after work started. No refund to user; provider half-share applies offline."
+                "User cancelled after work started. No refund to user; 50% of booking charge is reserved for labour."
         );
         notifyBookingRefundRejected(booking, payment);
+    }
+
+    private BigDecimal amountOrZero(BigDecimal amount) {
+        return amount == null ? BigDecimal.ZERO : amount;
     }
 
     private void applyNoRefundIfPaid(BookingEntity booking, String reason) {
@@ -528,12 +539,14 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
     }
 
     private void notifyProviderBookingUpdate(BookingEntity booking, String type, String title, String body, java.util.Map<String, Object> payload) {
+        java.util.Map<String, Object> providerPayload = new java.util.LinkedHashMap<>(payload);
+        providerPayload.put("appContext", "PROVIDER_APP");
         notificationService.notifyUser(
                 resolveProviderUserId(booking),
                 type,
                 title,
                 body,
-                payload
+                providerPayload
         );
     }
 

@@ -66,21 +66,35 @@ public class BookingDecisionServiceImpl implements BookingDecisionService {
         acceptedCandidate.setRespondedAt(now);
 
         List<BookingRequestCandidateEntity> allCandidates = bookingRequestCandidateRepository.findByRequestId(request.requestId());
+        boolean multiLabourBroadcast = bookingRequest.getBookingType() == BookingFlowType.LABOUR
+                && bookingRequest.getRequestMode() == BookingRequestMode.BROADCAST
+                && bookingRequest.getRequestedProviderCount() != null
+                && bookingRequest.getRequestedProviderCount() > 1;
+        int acceptedCount = (int) allCandidates.stream()
+                .filter(candidate -> candidate.getCandidateStatus() == BookingRequestCandidateStatus.ACCEPTED
+                        || candidate.getId().equals(acceptedCandidate.getId()))
+                .count();
         int closedCount = 0;
-        for (BookingRequestCandidateEntity candidate : allCandidates) {
-            if (candidate.getId().equals(acceptedCandidate.getId())) {
-                continue;
-            }
-            if (candidate.getCandidateStatus() == BookingRequestCandidateStatus.PENDING) {
-                candidate.setCandidateStatus(BookingRequestCandidateStatus.CLOSED);
-                candidate.setRespondedAt(now);
-                closedCount++;
+        boolean shouldCloseRemainingCandidates = !multiLabourBroadcast
+                || acceptedCount >= bookingRequest.getRequestedProviderCount();
+        if (shouldCloseRemainingCandidates) {
+            for (BookingRequestCandidateEntity candidate : allCandidates) {
+                if (candidate.getId().equals(acceptedCandidate.getId())) {
+                    continue;
+                }
+                if (candidate.getCandidateStatus() == BookingRequestCandidateStatus.PENDING) {
+                    candidate.setCandidateStatus(BookingRequestCandidateStatus.CLOSED);
+                    candidate.setRespondedAt(now);
+                    closedCount++;
+                }
             }
         }
         bookingRequestCandidateRepository.saveAll(allCandidates);
         bookingRequestCandidateRepository.save(acceptedCandidate);
 
-        bookingRequest.setRequestStatus(BookingRequestStatus.CONVERTED_TO_BOOKING);
+        if (shouldCloseRemainingCandidates) {
+            bookingRequest.setRequestStatus(BookingRequestStatus.CONVERTED_TO_BOOKING);
+        }
         bookingRequestRepository.save(bookingRequest);
 
         if (acceptedCandidate.getProviderEntityType() == ProviderEntityType.SERVICE_PROVIDER) {
@@ -129,7 +143,11 @@ public class BookingDecisionServiceImpl implements BookingDecisionService {
                     "BOOKING_ASSIGNED",
                     "Booking assigned",
                     "You accepted a booking. Wait for payment confirmation.",
-                    java.util.Map.of("bookingId", savedBooking.getId(), "bookingCode", savedBooking.getBookingCode())
+                    java.util.Map.of(
+                            "bookingId", savedBooking.getId(),
+                            "bookingCode", savedBooking.getBookingCode(),
+                            "appContext", "PROVIDER_APP"
+                    )
             );
         }
 

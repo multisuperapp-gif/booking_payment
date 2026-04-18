@@ -165,7 +165,7 @@ class BookingLifecycleServiceImplTest {
         assertEquals(92L, savedRefund.getId());
         assertEquals(RefundLifecycleStatus.REJECTED, savedRefund.getRefundStatus());
         assertEquals(BigDecimal.ZERO, savedRefund.getApprovedAmount());
-        assertEquals("User cancelled after work started. No refund to user; provider half-share applies offline.", savedRefund.getReason());
+        assertEquals("User cancelled after work started. No refund to user; 50% of booking charge is reserved for labour.", savedRefund.getReason());
         verify(paymentRepository, never()).save(any(PaymentEntity.class));
         verify(notificationService).notifyUser(
                 eq(77L),

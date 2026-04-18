@@ -4,6 +4,7 @@ import com.msa.booking.payment.booking.dto.AcceptBookingCandidateRequest;
 import com.msa.booking.payment.booking.dto.BookingAcceptanceData;
 import com.msa.booking.payment.booking.dto.BookingCandidateDecisionData;
 import com.msa.booking.payment.booking.dto.BookingRequestData;
+import com.msa.booking.payment.booking.dto.CancelBookingRequestRequest;
 import com.msa.booking.payment.booking.dto.CreateBookingRequest;
 import com.msa.booking.payment.booking.dto.ExpireBookingRequestsResponse;
 import com.msa.booking.payment.booking.dto.ProviderActiveBookingData;
@@ -89,6 +90,16 @@ public class BookingRequestController {
     @PostMapping("/expire")
     public ApiResponse<ExpireBookingRequestsResponse> expireTimedOutRequests() {
         return ApiResponse.success("Expired open booking requests successfully", bookingRequestService.expireTimedOutRequests());
+    }
+
+    @PostMapping("/{requestId}/cancel")
+    public ApiResponse<Void> cancelOpenRequest(
+            @RequestHeader("X-User-Id") Long userId,
+            @PathVariable Long requestId,
+            @RequestBody(required = false) CancelBookingRequestRequest request
+    ) {
+        bookingRequestService.cancelOpenRequest(userId, requestId, request == null ? null : request.reason());
+        return ApiResponse.success("Booking request cancelled successfully", null);
     }
 
     @PostMapping("/accept")
