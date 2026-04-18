@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.msa.booking.payment.common.exception.BadRequestException;
 import com.msa.booking.payment.common.exception.ResourceNotFoundException;
 import com.msa.booking.payment.config.RazorpayProperties;
+import com.msa.booking.payment.booking.support.BookingPolicyService;
 import com.msa.booking.payment.domain.enums.BookingLifecycleStatus;
 import com.msa.booking.payment.domain.enums.OrderLifecycleStatus;
 import com.msa.booking.payment.domain.enums.PayablePaymentStatus;
@@ -42,6 +43,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 import org.json.JSONObject;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -66,6 +68,7 @@ public class PaymentLifecycleService {
     private final PaymentWebhookEventService paymentWebhookEventService;
     private final SettlementLifecycleService settlementLifecycleService;
     private final NotificationService notificationService;
+    private final BookingPolicyService bookingPolicyService;
     private final ObjectMapper objectMapper;
 
     public PaymentLifecycleService(
@@ -83,6 +86,7 @@ public class PaymentLifecycleService {
             PaymentWebhookEventService paymentWebhookEventService,
             SettlementLifecycleService settlementLifecycleService,
             NotificationService notificationService,
+            BookingPolicyService bookingPolicyService,
             ObjectMapper objectMapper
     ) {
         this.paymentRepository = paymentRepository;
@@ -99,6 +103,7 @@ public class PaymentLifecycleService {
         this.paymentWebhookEventService = paymentWebhookEventService;
         this.settlementLifecycleService = settlementLifecycleService;
         this.notificationService = notificationService;
+        this.bookingPolicyService = bookingPolicyService;
         this.objectMapper = objectMapper;
     }
 
@@ -489,6 +494,7 @@ public class PaymentLifecycleService {
                 insertBookingStatusHistory(booking.getId(), oldStatus.name(), BookingLifecycleStatus.PAYMENT_COMPLETED.name(), payment.getPayerUserId(), "Payment completed");
             }
             bookingRepository.save(booking);
+            prepareStartWorkOtp(booking);
             return;
         }
 
@@ -503,8 +509,35 @@ public class PaymentLifecycleService {
                     insertBookingStatusHistory(booking.getId(), oldStatus.name(), BookingLifecycleStatus.PAYMENT_COMPLETED.name(), payment.getPayerUserId(), "Group booking payment completed");
                 }
                 bookingRepository.save(booking);
+                prepareStartWorkOtp(booking);
             }
         }
+    }
+
+    private void prepareStartWorkOtp(BookingEntity booking) {
+        if (booking == null || booking.getId() == null || booking.getUserId() == null) {
+            return;
+        }
+        jdbcTemplate.update("""
+                UPDATE booking_action_otps
+                   SET otp_status = 'CANCELLED'
+                 WHERE booking_id = :bookingId
+                   AND otp_purpose = 'START_WORK'
+                   AND otp_status = 'GENERATED'
+                """, new MapSqlParameterSource("bookingId", booking.getId()));
+
+        LocalDateTime expiryBase = booking.getScheduledStartAt() == null ? LocalDateTime.now() : booking.getScheduledStartAt();
+        int reachMinutes = bookingPolicyService == null ? 45 : bookingPolicyService.noShowAutoCancelMinutes();
+        jdbcTemplate.update("""
+                INSERT INTO booking_action_otps
+                    (booking_id, otp_purpose, otp_code, issued_to_user_id, otp_status, expires_at)
+                VALUES
+                    (:bookingId, 'START_WORK', :otpCode, :issuedToUserId, 'GENERATED', :expiresAt)
+                """, new MapSqlParameterSource()
+                .addValue("bookingId", booking.getId())
+                .addValue("otpCode", String.valueOf(ThreadLocalRandom.current().nextInt(100000, 1_000_000)))
+                .addValue("issuedToUserId", booking.getUserId())
+                .addValue("expiresAt", expiryBase.plusMinutes(reachMinutes)));
     }
 
     private void preparePayableForRetry(PaymentEntity payment) {

@@ -24,6 +24,7 @@ import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -270,6 +271,16 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
             return null;
         }
 
+        String startOtpCode = raw.startOtpCode();
+        LocalDateTime startOtpExpiresAt = raw.startOtpExpiresAt();
+        if ((raw.bookingStatus() == BookingLifecycleStatus.PAYMENT_COMPLETED
+                || raw.bookingStatus() == BookingLifecycleStatus.ARRIVED)
+                && (startOtpCode == null || startOtpCode.isBlank())) {
+            StartOtpData generatedStartOtp = prepareMissingStartOtp(raw.bookingId(), raw.scheduledStartAt());
+            startOtpCode = generatedStartOtp.otpCode();
+            startOtpExpiresAt = generatedStartOtp.expiresAt();
+        }
+
         String resolvedPhone = raw.customerPhone();
         boolean revealPhone = raw.paymentStatus() == PayablePaymentStatus.PAID
                 || raw.bookingStatus() == BookingLifecycleStatus.ARRIVED
@@ -303,8 +314,8 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 raw.postalCode(),
                 raw.destinationLatitude(),
                 raw.destinationLongitude(),
-                raw.startOtpCode(),
-                raw.startOtpExpiresAt(),
+                startOtpCode,
+                startOtpExpiresAt,
                 raw.completeOtpCode(),
                 raw.completeOtpExpiresAt(),
                 raw.mutualCancelOtpCode(),
@@ -436,6 +447,8 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 providerLocationPhotoData == null ? null : providerLocationPhotoData.photoObjectKey(),
                 !revealProviderLiveLocation || providerLocationPhotoData == null ? null : providerLocationPhotoData.latitude(),
                 !revealProviderLiveLocation || providerLocationPhotoData == null ? null : providerLocationPhotoData.longitude(),
+                request.getSearchLatitude(),
+                request.getSearchLongitude(),
                 paymentDueAt,
                 reachByAt,
                 request.getLabourPricingModel(),
@@ -467,6 +480,31 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
         return "automobile".equalsIgnoreCase(categoryLabel)
                 ? bookingPolicyService.serviceAutomobileReachTimelineMinutes()
                 : bookingPolicyService.serviceDefaultReachTimelineMinutes();
+    }
+
+    private StartOtpData prepareMissingStartOtp(Long bookingId, LocalDateTime scheduledStartAt) {
+        jdbcTemplate.update("""
+                UPDATE booking_action_otps
+                   SET otp_status = 'CANCELLED'
+                 WHERE booking_id = :bookingId
+                   AND otp_purpose = 'START_WORK'
+                   AND otp_status = 'GENERATED'
+                """, new MapSqlParameterSource("bookingId", bookingId));
+
+        String otpCode = String.valueOf(ThreadLocalRandom.current().nextInt(100000, 1_000_000));
+        LocalDateTime expiryBase = scheduledStartAt == null ? LocalDateTime.now() : scheduledStartAt;
+        LocalDateTime expiresAt = expiryBase.plusMinutes(bookingPolicyService.noShowAutoCancelMinutes());
+        jdbcTemplate.update("""
+                INSERT INTO booking_action_otps
+                    (booking_id, otp_purpose, otp_code, issued_to_user_id, otp_status, expires_at)
+                SELECT id, 'START_WORK', :otpCode, user_id, 'GENERATED', :expiresAt
+                  FROM bookings
+                 WHERE id = :bookingId
+                """, new MapSqlParameterSource()
+                .addValue("bookingId", bookingId)
+                .addValue("otpCode", otpCode)
+                .addValue("expiresAt", expiresAt));
+        return new StartOtpData(otpCode, expiresAt);
     }
 
     private String resolveCategoryLabel(BookingRequestEntity request) {
@@ -538,6 +576,12 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
             String photoObjectKey,
             BigDecimal latitude,
             BigDecimal longitude
+    ) {
+    }
+
+    private record StartOtpData(
+            String otpCode,
+            LocalDateTime expiresAt
     ) {
     }
 }

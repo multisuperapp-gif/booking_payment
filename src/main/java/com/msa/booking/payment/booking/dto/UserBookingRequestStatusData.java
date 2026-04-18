@@ -25,6 +25,8 @@ public record UserBookingRequestStatusData(
         String providerPhotoObjectKey,
         BigDecimal providerLatitude,
         BigDecimal providerLongitude,
+        BigDecimal destinationLatitude,
+        BigDecimal destinationLongitude,
         LocalDateTime paymentDueAt,
         LocalDateTime reachByAt,
         String labourPricingModel,

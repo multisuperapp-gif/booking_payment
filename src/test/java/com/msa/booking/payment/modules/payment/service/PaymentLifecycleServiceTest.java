@@ -1,6 +1,7 @@
 package com.msa.booking.payment.modules.payment.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.msa.booking.payment.booking.support.BookingPolicyService;
 import com.msa.booking.payment.config.RazorpayProperties;
 import com.msa.booking.payment.domain.enums.PayableType;
 import com.msa.booking.payment.domain.enums.PaymentAttemptStatus;
@@ -76,6 +77,8 @@ class PaymentLifecycleServiceTest {
     private SettlementLifecycleService settlementLifecycleService;
     @Mock
     private NotificationService notificationService;
+    @Mock
+    private BookingPolicyService bookingPolicyService;
 
     private PaymentLifecycleService service;
 
@@ -96,6 +99,7 @@ class PaymentLifecycleServiceTest {
                 paymentWebhookEventService,
                 settlementLifecycleService,
                 notificationService,
+                bookingPolicyService,
                 new ObjectMapper()
         ) {
             @Override

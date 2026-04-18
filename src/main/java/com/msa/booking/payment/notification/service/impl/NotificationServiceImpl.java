@@ -82,24 +82,30 @@ public class NotificationServiceImpl implements NotificationService {
             delivery.setChannel("PUSH");
             delivery.setDeliveryStatus("PENDING");
             try {
-                Map<String, String> data = buildDataPayload(saved.getId(), type, payload);
+                Map<String, String> data = buildDataPayload(saved.getId(), type, title, body, payload);
+                boolean incomingBookingRequest = isIncomingBookingRequest(type);
+                boolean androidToken = "ANDROID".equalsIgnoreCase(pushToken.getPlatform());
                 Message.Builder messageBuilder = Message.builder()
                         .setToken(pushToken.getPushToken())
-                        .setNotification(Notification.builder().setTitle(title).setBody(body).build())
                         .putAllData(data);
-                if (isIncomingBookingRequest(type)) {
+                if (!incomingBookingRequest || !androidToken) {
+                    messageBuilder.setNotification(Notification.builder().setTitle(title).setBody(body).build());
+                }
+                if (incomingBookingRequest) {
+                    AndroidConfig.Builder androidConfigBuilder = AndroidConfig.builder()
+                            .setPriority(AndroidConfig.Priority.HIGH)
+                            .setTtl(300_000L);
+                    if (!androidToken) {
+                        androidConfigBuilder.setNotification(AndroidNotification.builder()
+                                .setChannelId(INCOMING_BOOKING_CHANNEL_ID)
+                                .setSound(INCOMING_BOOKING_SOUND_NAME)
+                                .setPriority(AndroidNotification.Priority.MAX)
+                                .setVisibility(AndroidNotification.Visibility.PUBLIC)
+                                .setDefaultVibrateTimings(true)
+                                .build());
+                    }
                     messageBuilder
-                            .setAndroidConfig(AndroidConfig.builder()
-                                    .setPriority(AndroidConfig.Priority.HIGH)
-                                    .setTtl(300_000L)
-                                    .setNotification(AndroidNotification.builder()
-                                            .setChannelId(INCOMING_BOOKING_CHANNEL_ID)
-                                            .setSound(INCOMING_BOOKING_SOUND_NAME)
-                                            .setPriority(AndroidNotification.Priority.MAX)
-                                            .setVisibility(AndroidNotification.Visibility.PUBLIC)
-                                            .setDefaultVibrateTimings(true)
-                                            .build())
-                                    .build())
+                            .setAndroidConfig(androidConfigBuilder.build())
                             .setApnsConfig(ApnsConfig.builder()
                                     .putHeader("apns-priority", "10")
                                     .setAps(Aps.builder()
@@ -138,15 +144,18 @@ public class NotificationServiceImpl implements NotificationService {
         }
     }
 
-    private Map<String, String> buildDataPayload(Long notificationId, String type, Map<String, Object> payload) {
+    private Map<String, String> buildDataPayload(Long notificationId, String type, String title, String body, Map<String, Object> payload) {
         Map<String, String> data = new LinkedHashMap<>();
         data.put("type", type == null ? "" : type);
         data.put("notificationId", String.valueOf(notificationId));
+        data.put("title", title == null ? "" : title);
+        data.put("body", body == null ? "" : body);
         if (isIncomingBookingRequest(type)) {
             data.put("priority", "high");
             data.put("notificationChannelId", INCOMING_BOOKING_CHANNEL_ID);
             data.put("sound", INCOMING_BOOKING_SOUND_NAME);
             data.put("requiresProviderAction", "true");
+            data.put("fullScreenAlert", "true");
         }
         if (payload != null) {
             payload.forEach((key, value) -> {
