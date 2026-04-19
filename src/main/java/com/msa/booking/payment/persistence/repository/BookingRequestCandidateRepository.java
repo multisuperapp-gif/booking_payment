@@ -11,5 +11,11 @@ public interface BookingRequestCandidateRepository extends JpaRepository<Booking
 
     List<BookingRequestCandidateEntity> findByRequestIdAndCandidateStatus(Long requestId, BookingRequestCandidateStatus candidateStatus);
 
+    List<BookingRequestCandidateEntity> findByProviderEntityTypeAndProviderEntityIdAndCandidateStatus(
+            com.msa.booking.payment.domain.enums.ProviderEntityType providerEntityType,
+            Long providerEntityId,
+            BookingRequestCandidateStatus candidateStatus
+    );
+
     java.util.Optional<BookingRequestCandidateEntity> findByIdAndRequestId(Long id, Long requestId);
 }

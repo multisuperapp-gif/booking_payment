@@ -521,7 +521,10 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
                     ? bookingPolicyService.serviceAutomobileReachTimelineMinutes()
                     : bookingPolicyService.serviceDefaultReachTimelineMinutes();
         }
-        return now.isAfter(booking.getScheduledStartAt().plusMinutes(minutes));
+        LocalDateTime baseTime = booking.getCreatedAt() != null
+                ? booking.getCreatedAt()
+                : booking.getScheduledStartAt();
+        return now.isAfter(baseTime.plusMinutes(minutes));
     }
 
     private void releaseCapacityIfNeeded(BookingEntity booking) {

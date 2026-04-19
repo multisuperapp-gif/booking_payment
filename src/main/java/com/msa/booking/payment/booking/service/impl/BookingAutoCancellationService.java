@@ -1,5 +1,7 @@
 package com.msa.booking.payment.booking.service.impl;
 
+import com.msa.booking.payment.booking.dto.ExpireBookingRequestsResponse;
+import com.msa.booking.payment.booking.service.BookingRequestService;
 import com.msa.booking.payment.booking.support.BookingHistoryService;
 import com.msa.booking.payment.booking.support.BookingPolicyService;
 import com.msa.booking.payment.domain.enums.BookingLifecycleStatus;
@@ -54,6 +56,7 @@ public class BookingAutoCancellationService {
     private final RefundRepository refundRepository;
     private final BookingPolicyService bookingPolicyService;
     private final BookingHistoryService bookingHistoryService;
+    private final BookingRequestService bookingRequestService;
     private final NotificationService notificationService;
     private final SettlementLifecycleService settlementLifecycleService;
     private final Set<Long> warnedReachDeadlineBookingIds = ConcurrentHashMap.newKeySet();
@@ -67,6 +70,7 @@ public class BookingAutoCancellationService {
             RefundRepository refundRepository,
             BookingPolicyService bookingPolicyService,
             BookingHistoryService bookingHistoryService,
+            BookingRequestService bookingRequestService,
             NotificationService notificationService,
             SettlementLifecycleService settlementLifecycleService
     ) {
@@ -78,6 +82,7 @@ public class BookingAutoCancellationService {
         this.refundRepository = refundRepository;
         this.bookingPolicyService = bookingPolicyService;
         this.bookingHistoryService = bookingHistoryService;
+        this.bookingRequestService = bookingRequestService;
         this.notificationService = notificationService;
         this.settlementLifecycleService = settlementLifecycleService;
     }
@@ -88,12 +93,24 @@ public class BookingAutoCancellationService {
     )
     @Transactional
     public void cancelStaleBookings() {
+        int expiredRequests = expireTimedOutBookingRequests();
         int unpaid = cancelAcceptedButUnpaidBookings();
         int warnings = notifyUpcomingReachDeadlineBookings();
         int noShow = cancelProviderNoShowBookings();
-        if (unpaid > 0 || warnings > 0 || noShow > 0) {
-            LOGGER.info("Auto-processed stale bookings. unpaid={}, warnings={}, noShow={}", unpaid, warnings, noShow);
+        if (expiredRequests > 0 || unpaid > 0 || warnings > 0 || noShow > 0) {
+            LOGGER.info(
+                    "Auto-processed stale booking state. expiredRequests={}, unpaid={}, warnings={}, noShow={}",
+                    expiredRequests,
+                    unpaid,
+                    warnings,
+                    noShow
+            );
         }
+    }
+
+    int expireTimedOutBookingRequests() {
+        ExpireBookingRequestsResponse response = bookingRequestService.expireTimedOutRequests();
+        return response == null ? 0 : response.expiredRequests();
     }
 
     int cancelAcceptedButUnpaidBookings() {
@@ -120,7 +137,7 @@ public class BookingAutoCancellationService {
     int cancelProviderNoShowBookings() {
         LocalDateTime cutoff = LocalDateTime.now().minusMinutes(bookingPolicyService.noShowAutoCancelMinutes());
         List<BookingEntity> staleBookings = bookingRepository
-                .findTop100ByBookingStatusAndPaymentStatusAndScheduledStartAtBefore(
+                .findTop100ByBookingStatusAndPaymentStatusAndCreatedAtBefore(
                         BookingLifecycleStatus.PAYMENT_COMPLETED,
                         PayablePaymentStatus.PAID,
                         cutoff
@@ -141,7 +158,7 @@ public class BookingAutoCancellationService {
     int notifyUpcomingReachDeadlineBookings() {
         LocalDateTime now = LocalDateTime.now();
         List<BookingEntity> activeConfirmedBookings = bookingRepository
-                .findTop500ByBookingStatusAndPaymentStatusAndScheduledStartAtAfterOrderByScheduledStartAtAsc(
+                .findTop500ByBookingStatusAndPaymentStatusAndCreatedAtAfterOrderByCreatedAtAsc(
                         BookingLifecycleStatus.PAYMENT_COMPLETED,
                         PayablePaymentStatus.PAID,
                         now.minusMinutes(WARNING_SCAN_LOOKBACK_MINUTES)
@@ -153,7 +170,8 @@ public class BookingAutoCancellationService {
 
         int warned = 0;
         for (BookingEntity booking : activeConfirmedBookings) {
-            LocalDateTime reachByAt = booking.getScheduledStartAt().plusMinutes(resolveReachTimelineMinutes(booking));
+            LocalDateTime baseTime = reachTimelineBase(booking);
+            LocalDateTime reachByAt = baseTime.plusMinutes(resolveReachTimelineMinutes(booking));
             LocalDateTime warningAt = reachByAt.minusMinutes(bookingPolicyService.reachWarningMinutes());
             if (now.isBefore(warningAt) || !now.isBefore(reachByAt)) {
                 continue;
@@ -373,6 +391,12 @@ public class BookingAutoCancellationService {
         return "automobile".equalsIgnoreCase(categoryName)
                 ? bookingPolicyService.serviceAutomobileReachTimelineMinutes()
                 : bookingPolicyService.serviceDefaultReachTimelineMinutes();
+    }
+
+    private LocalDateTime reachTimelineBase(BookingEntity booking) {
+        return booking.getCreatedAt() != null
+                ? booking.getCreatedAt()
+                : booking.getScheduledStartAt();
     }
 
     private void notifyUser(BookingEntity booking, String type, String title, String body) {

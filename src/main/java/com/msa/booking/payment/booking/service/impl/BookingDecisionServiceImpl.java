@@ -18,7 +18,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -91,6 +94,7 @@ public class BookingDecisionServiceImpl implements BookingDecisionService {
         }
         bookingRequestCandidateRepository.saveAll(allCandidates);
         bookingRequestCandidateRepository.save(acceptedCandidate);
+        autoRejectOtherPendingRequestsForProvider(acceptedCandidate, bookingRequest.getId(), now);
 
         if (shouldCloseRemainingCandidates) {
             bookingRequest.setRequestStatus(BookingRequestStatus.CONVERTED_TO_BOOKING);
@@ -210,6 +214,62 @@ public class BookingDecisionServiceImpl implements BookingDecisionService {
 
     private String generateBookingCode() {
         return "BKG-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase();
+    }
+
+    private void autoRejectOtherPendingRequestsForProvider(
+            BookingRequestCandidateEntity acceptedCandidate,
+            Long acceptedRequestId,
+            LocalDateTime now
+    ) {
+        List<BookingRequestCandidateEntity> providerPendingCandidates = bookingRequestCandidateRepository
+                .findByProviderEntityTypeAndProviderEntityIdAndCandidateStatus(
+                        acceptedCandidate.getProviderEntityType(),
+                        acceptedCandidate.getProviderEntityId(),
+                        BookingRequestCandidateStatus.PENDING
+                );
+        if (providerPendingCandidates.isEmpty()) {
+            return;
+        }
+
+        List<BookingRequestCandidateEntity> candidatesToReject = new ArrayList<>();
+        Set<Long> affectedRequestIds = new HashSet<>();
+        for (BookingRequestCandidateEntity candidate : providerPendingCandidates) {
+            if (candidate.getId().equals(acceptedCandidate.getId())
+                    || candidate.getRequestId().equals(acceptedRequestId)) {
+                continue;
+            }
+            candidate.setCandidateStatus(BookingRequestCandidateStatus.REJECTED);
+            candidate.setRespondedAt(now);
+            candidatesToReject.add(candidate);
+            affectedRequestIds.add(candidate.getRequestId());
+        }
+        if (candidatesToReject.isEmpty()) {
+            return;
+        }
+
+        bookingRequestCandidateRepository.saveAll(candidatesToReject);
+        for (Long requestId : affectedRequestIds) {
+            BookingRequestEntity request = bookingRequestRepository.findById(requestId).orElse(null);
+            if (request == null || request.getRequestStatus() != BookingRequestStatus.OPEN) {
+                continue;
+            }
+            List<BookingRequestCandidateEntity> requestCandidates = bookingRequestCandidateRepository.findByRequestId(requestId);
+            boolean hasAcceptedCandidate = requestCandidates.stream()
+                    .anyMatch(candidate -> candidate.getCandidateStatus() == BookingRequestCandidateStatus.ACCEPTED);
+            boolean hasPendingCandidate = requestCandidates.stream()
+                    .anyMatch(candidate -> candidate.getCandidateStatus() == BookingRequestCandidateStatus.PENDING);
+            if (!hasAcceptedCandidate && !hasPendingCandidate) {
+                request.setRequestStatus(BookingRequestStatus.CANCELLED);
+                bookingRequestRepository.save(request);
+                notificationService.notifyUser(
+                        request.getUserId(),
+                        "BOOKING_REJECTED",
+                        "Booking request closed",
+                        "The provider became unavailable before accepting your booking request.",
+                        java.util.Map.of("requestId", request.getId(), "requestCode", request.getRequestCode())
+                );
+            }
+        }
     }
 
     private void validateCandidateOwner(Long actingUserId, BookingRequestCandidateEntity candidate) {

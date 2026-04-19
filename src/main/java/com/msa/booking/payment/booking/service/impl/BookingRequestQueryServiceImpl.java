@@ -84,6 +84,8 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 WHERE brc.provider_entity_type = :providerEntityType
                   AND brc.candidate_status = 'PENDING'
                   AND br.request_status = 'OPEN'
+                  AND br.expires_at > CURRENT_TIMESTAMP
+                  AND brc.expires_at > CURRENT_TIMESTAMP
                   AND (
                         (:providerEntityType = 'LABOUR' AND EXISTS (
                             SELECT 1
@@ -247,7 +249,7 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                     rs.getBigDecimal("distance_km"),
                     scheduledStartAt,
                     createdAt.plusSeconds(bookingPolicyService.acceptedPaymentTimeoutSeconds()),
-                    scheduledStartAt.plusMinutes(resolveReachTimelineMinutes(bookingType, categoryLabel)),
+                    createdAt.plusMinutes(resolveReachTimelineMinutes(bookingType, categoryLabel)),
                     categoryLabel,
                     rs.getString("labour_pricing_model"),
                     rs.getString("address_label"),
@@ -276,7 +278,7 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
         if ((raw.bookingStatus() == BookingLifecycleStatus.PAYMENT_COMPLETED
                 || raw.bookingStatus() == BookingLifecycleStatus.ARRIVED)
                 && (startOtpCode == null || startOtpCode.isBlank())) {
-            StartOtpData generatedStartOtp = prepareMissingStartOtp(raw.bookingId(), raw.scheduledStartAt());
+            StartOtpData generatedStartOtp = prepareMissingStartOtp(raw.bookingId(), raw.reachByAt());
             startOtpCode = generatedStartOtp.otpCode();
             startOtpExpiresAt = generatedStartOtp.expiresAt();
         }
@@ -434,9 +436,10 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 ? null
                 : booking.getCreatedAt().plusSeconds(bookingPolicyService.acceptedPaymentTimeoutSeconds());
         String categoryLabel = resolveCategoryLabel(request);
-        LocalDateTime reachByAt = booking == null || booking.getScheduledStartAt() == null
+        LocalDateTime reachByAt = booking == null || (booking.getCreatedAt() == null && booking.getScheduledStartAt() == null)
                 ? null
-                : booking.getScheduledStartAt().plusMinutes(resolveReachTimelineMinutes(request.getBookingType(), categoryLabel));
+                : (booking.getCreatedAt() != null ? booking.getCreatedAt() : booking.getScheduledStartAt())
+                        .plusMinutes(resolveReachTimelineMinutes(request.getBookingType(), categoryLabel));
         boolean revealProviderLiveLocation = booking != null && booking.getPaymentStatus() == PayablePaymentStatus.PAID;
 
         return new UserBookingRequestStatusData(
@@ -491,7 +494,7 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 : bookingPolicyService.serviceDefaultReachTimelineMinutes();
     }
 
-    private StartOtpData prepareMissingStartOtp(Long bookingId, LocalDateTime scheduledStartAt) {
+    private StartOtpData prepareMissingStartOtp(Long bookingId, LocalDateTime reachByAt) {
         jdbcTemplate.update("""
                 UPDATE booking_action_otps
                    SET otp_status = 'CANCELLED'
@@ -501,8 +504,9 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 """, new MapSqlParameterSource("bookingId", bookingId));
 
         String otpCode = String.valueOf(ThreadLocalRandom.current().nextInt(100000, 1_000_000));
-        LocalDateTime expiryBase = scheduledStartAt == null ? LocalDateTime.now() : scheduledStartAt;
-        LocalDateTime expiresAt = expiryBase.plusMinutes(bookingPolicyService.noShowAutoCancelMinutes());
+        LocalDateTime expiresAt = reachByAt == null
+                ? LocalDateTime.now().plusMinutes(bookingPolicyService.noShowAutoCancelMinutes())
+                : reachByAt.plusMinutes(bookingPolicyService.noShowAutoCancelMinutes());
         jdbcTemplate.update("""
                 INSERT INTO booking_action_otps
                     (booking_id, otp_purpose, otp_code, issued_to_user_id, otp_status, expires_at)

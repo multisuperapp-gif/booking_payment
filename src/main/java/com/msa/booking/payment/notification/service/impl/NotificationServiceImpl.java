@@ -32,6 +32,9 @@ public class NotificationServiceImpl implements NotificationService {
     private static final String INCOMING_BOOKING_CHANNEL_ID = "incoming_bookings";
     private static final String INCOMING_BOOKING_SOUND_NAME = "incoming_booking_alert";
     private static final String INCOMING_BOOKING_SOUND_FILE = "incoming_booking_alert.wav";
+    private static final String BOOKING_UPDATES_CHANNEL_ID = "booking_updates";
+    private static final String BOOKING_UPDATES_SOUND_NAME = "skins_theme_short";
+    private static final String BOOKING_UPDATES_SOUND_FILE = "skins_theme_short.mp3";
     private static final String USER_APP_CONTEXT = "USER_APP";
     private static final String PROVIDER_APP_CONTEXT = "PROVIDER_APP";
 
@@ -111,6 +114,21 @@ public class NotificationServiceImpl implements NotificationService {
                                     .setAps(Aps.builder()
                                             .setSound(INCOMING_BOOKING_SOUND_FILE)
                                             .setCategory("INCOMING_BOOKING")
+                                    .build())
+                                    .build());
+                } else if (hasBookingUpdateSound(type)) {
+                    messageBuilder
+                            .setAndroidConfig(AndroidConfig.builder()
+                                    .setPriority(AndroidConfig.Priority.HIGH)
+                                    .setNotification(AndroidNotification.builder()
+                                            .setChannelId(BOOKING_UPDATES_CHANNEL_ID)
+                                            .setSound(BOOKING_UPDATES_SOUND_NAME)
+                                            .build())
+                                    .build())
+                            .setApnsConfig(ApnsConfig.builder()
+                                    .putHeader("apns-priority", "10")
+                                    .setAps(Aps.builder()
+                                            .setSound(BOOKING_UPDATES_SOUND_FILE)
                                             .build())
                                     .build());
                 }
@@ -156,6 +174,9 @@ public class NotificationServiceImpl implements NotificationService {
             data.put("sound", INCOMING_BOOKING_SOUND_NAME);
             data.put("requiresProviderAction", "true");
             data.put("fullScreenAlert", "true");
+        } else if (hasBookingUpdateSound(type)) {
+            data.put("notificationChannelId", BOOKING_UPDATES_CHANNEL_ID);
+            data.put("sound", BOOKING_UPDATES_SOUND_NAME);
         }
         if (payload != null) {
             payload.forEach((key, value) -> {
@@ -170,6 +191,18 @@ public class NotificationServiceImpl implements NotificationService {
 
     private boolean isIncomingBookingRequest(String type) {
         return "BOOKING_REQUEST_NEW".equalsIgnoreCase(type);
+    }
+
+    private boolean hasBookingUpdateSound(String type) {
+        String normalized = type == null ? "" : type.trim().toUpperCase();
+        return "BOOKING_ACCEPTED".equals(normalized)
+                || "BOOKING_PAYMENT_SUCCESS".equals(normalized)
+                || "BOOKING_PROVIDER_ARRIVED".equals(normalized)
+                || "BOOKING_CANCELLED".equals(normalized)
+                || "BOOKING_COMPLETED".equals(normalized)
+                || "BOOKING_PAYMENT_SUCCESS_PROVIDER".equals(normalized)
+                || "BOOKING_CANCELLED_PROVIDER".equals(normalized)
+                || "BOOKING_WORK_STARTED_PROVIDER".equals(normalized);
     }
 
     private String targetAppContext(String type, Map<String, Object> payload) {
