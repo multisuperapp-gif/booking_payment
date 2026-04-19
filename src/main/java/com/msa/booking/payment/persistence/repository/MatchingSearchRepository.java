@@ -54,7 +54,8 @@ public interface MatchingSearchRepository extends Repository<BookingRequestEntit
                 WHERE brc.provider_entity_type = 'LABOUR'
                   AND brc.provider_entity_id = lp.id
                   AND brc.candidate_status = 'ACCEPTED'
-                  AND br.request_status IN ('OPEN', 'ACCEPTED', 'CONVERTED_TO_BOOKING')
+                  AND br.request_status IN ('OPEN', 'ACCEPTED')
+                  AND (br.request_status <> 'OPEN' OR br.expires_at > CURRENT_TIMESTAMP)
               )
             GROUP BY lp.id
             HAVING quotedPriceAmount > 0
