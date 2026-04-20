@@ -16,10 +16,12 @@ import com.msa.booking.payment.domain.enums.ProviderEntityType;
 import com.msa.booking.payment.persistence.entity.BookingEntity;
 import com.msa.booking.payment.persistence.entity.BookingRequestCandidateEntity;
 import com.msa.booking.payment.persistence.entity.BookingRequestEntity;
+import com.msa.booking.payment.persistence.entity.BookingStatusHistoryEntity;
 import com.msa.booking.payment.persistence.repository.BookingParticipantContactProjection;
 import com.msa.booking.payment.persistence.repository.BookingRepository;
 import com.msa.booking.payment.persistence.repository.BookingRequestCandidateRepository;
 import com.msa.booking.payment.persistence.repository.BookingRequestRepository;
+import com.msa.booking.payment.persistence.repository.BookingStatusHistoryRepository;
 import com.msa.booking.payment.persistence.repository.BookingSupportRepository;
 import java.math.BigDecimal;
 import java.sql.Timestamp;
@@ -37,6 +39,7 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
     private final BookingRequestRepository bookingRequestRepository;
     private final BookingRequestCandidateRepository bookingRequestCandidateRepository;
     private final BookingRepository bookingRepository;
+    private final BookingStatusHistoryRepository bookingStatusHistoryRepository;
     private final BookingPolicyService bookingPolicyService;
 
     public BookingRequestQueryServiceImpl(
@@ -45,6 +48,7 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
             BookingRequestRepository bookingRequestRepository,
             BookingRequestCandidateRepository bookingRequestCandidateRepository,
             BookingRepository bookingRepository,
+            BookingStatusHistoryRepository bookingStatusHistoryRepository,
             BookingPolicyService bookingPolicyService
     ) {
         this.jdbcTemplate = jdbcTemplate;
@@ -52,6 +56,7 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
         this.bookingRequestRepository = bookingRequestRepository;
         this.bookingRequestCandidateRepository = bookingRequestCandidateRepository;
         this.bookingRepository = bookingRepository;
+        this.bookingStatusHistoryRepository = bookingStatusHistoryRepository;
         this.bookingPolicyService = bookingPolicyService;
     }
 
@@ -485,6 +490,13 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                     .stream()
                     .findFirst()
                     .orElse(null);
+            if (booking == null || booking.getBookingStatus() == null) {
+                continue;
+            }
+            if (booking.getBookingStatus() != BookingLifecycleStatus.COMPLETED
+                    && booking.getBookingStatus() != BookingLifecycleStatus.CANCELLED) {
+                continue;
+            }
             history.add(buildStatusData(request, booking));
         }
         return history;
@@ -572,12 +584,14 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 : (booking.getCreatedAt() != null ? booking.getCreatedAt() : booking.getScheduledStartAt())
                         .plusMinutes(resolveReachTimelineMinutes(request.getBookingType(), categoryLabel));
         boolean revealProviderLiveLocation = booking != null && booking.getPaymentStatus() == PayablePaymentStatus.PAID;
+        String historyStatus = resolveHistoryStatus(booking);
 
         return new UserBookingRequestStatusData(
                 request.getId(),
                 request.getRequestCode(),
                 request.getBookingType(),
                 request.getRequestStatus(),
+                historyStatus,
                 candidateId,
                 providerEntityType,
                 providerEntityId,
@@ -604,6 +618,33 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 booking == null ? null : booking.getPaymentStatus(),
                 request.getCreatedAt()
         );
+    }
+
+    private String resolveHistoryStatus(BookingEntity booking) {
+        if (booking == null || booking.getBookingStatus() == null) {
+            return "";
+        }
+        if (booking.getBookingStatus() == BookingLifecycleStatus.COMPLETED) {
+            return "COMPLETED";
+        }
+        if (booking.getBookingStatus() == BookingLifecycleStatus.CANCELLED) {
+            if (booking.getPaymentStatus() == PayablePaymentStatus.FAILED) {
+                return "PAYMENT_FAILED";
+            }
+            BookingStatusHistoryEntity latestHistory = bookingStatusHistoryRepository
+                    .findByBookingIdOrderByChangedAtAsc(booking.getId())
+                    .stream()
+                    .reduce((first, second) -> second)
+                    .orElse(null);
+            String reason = latestHistory == null || latestHistory.getReason() == null
+                    ? ""
+                    : latestHistory.getReason().trim().toUpperCase();
+            if (reason.contains("NO_SHOW") || reason.contains("NO SHOW")) {
+                return "NO_SHOW";
+            }
+            return "CANCELLED";
+        }
+        return booking.getBookingStatus().name();
     }
 
     private String maskPhone(String phone) {

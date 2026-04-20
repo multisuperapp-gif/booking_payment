@@ -13,6 +13,7 @@ public record UserBookingRequestStatusData(
         String requestCode,
         BookingFlowType bookingType,
         BookingRequestStatus requestStatus,
+        String historyStatus,
         Long candidateId,
         ProviderEntityType providerEntityType,
         Long providerEntityId,
