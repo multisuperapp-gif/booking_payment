@@ -4,11 +4,10 @@ import com.msa.booking.payment.domain.enums.BookingFlowType;
 import com.msa.booking.payment.domain.enums.BookingLifecycleStatus;
 import com.msa.booking.payment.domain.enums.PayablePaymentStatus;
 import com.msa.booking.payment.domain.enums.ProviderEntityType;
-
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
-public record ProviderActiveBookingData(
+public record ProviderBookingHistoryData(
         Long bookingId,
         String bookingCode,
         BookingFlowType bookingType,
@@ -21,26 +20,8 @@ public record ProviderActiveBookingData(
         BigDecimal quotedPriceAmount,
         BigDecimal distanceKm,
         LocalDateTime scheduledStartAt,
-        LocalDateTime paymentDueAt,
-        LocalDateTime reachByAt,
+        LocalDateTime createdAt,
         String categoryLabel,
-        String labourPricingModel,
-        String addressLabel,
-        String addressLine1,
-        String addressLine2,
-        String landmark,
-        String city,
-        String state,
-        String postalCode,
-        BigDecimal providerLatitude,
-        BigDecimal providerLongitude,
-        BigDecimal destinationLatitude,
-        BigDecimal destinationLongitude,
-        String startOtpCode,
-        LocalDateTime startOtpExpiresAt,
-        String completeOtpCode,
-        LocalDateTime completeOtpExpiresAt,
-        String mutualCancelOtpCode,
-        LocalDateTime mutualCancelOtpExpiresAt
+        String labourPricingModel
 ) {
 }

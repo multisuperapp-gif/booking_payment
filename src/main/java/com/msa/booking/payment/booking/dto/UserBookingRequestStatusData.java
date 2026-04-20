@@ -36,6 +36,7 @@ public record UserBookingRequestStatusData(
         Long bookingId,
         String bookingCode,
         BookingLifecycleStatus bookingStatus,
-        PayablePaymentStatus paymentStatus
+        PayablePaymentStatus paymentStatus,
+        LocalDateTime createdAt
 ) {
 }

@@ -16,4 +16,6 @@ public interface BookingRequestRepository extends JpaRepository<BookingRequestEn
     Optional<BookingRequestEntity> findByIdAndRequestStatus(Long id, BookingRequestStatus requestStatus);
 
     List<BookingRequestEntity> findTop20ByUserIdOrderByCreatedAtDesc(Long userId);
+
+    List<BookingRequestEntity> findTop50ByUserIdOrderByCreatedAtDesc(Long userId);
 }

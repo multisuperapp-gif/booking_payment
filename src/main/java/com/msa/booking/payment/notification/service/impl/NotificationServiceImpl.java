@@ -32,7 +32,7 @@ public class NotificationServiceImpl implements NotificationService {
     private static final String INCOMING_BOOKING_CHANNEL_ID = "incoming_bookings";
     private static final String INCOMING_BOOKING_SOUND_NAME = "incoming_booking_alert";
     private static final String INCOMING_BOOKING_SOUND_FILE = "incoming_booking_alert.wav";
-    private static final String BOOKING_UPDATES_CHANNEL_ID = "booking_updates";
+    private static final String BOOKING_UPDATES_CHANNEL_ID = "booking_updates_v2";
     private static final String BOOKING_UPDATES_SOUND_NAME = "skins_theme_short";
     private static final String BOOKING_UPDATES_SOUND_FILE = "skins_theme_short.mp3";
     private static final String USER_APP_CONTEXT = "USER_APP";
@@ -198,11 +198,15 @@ public class NotificationServiceImpl implements NotificationService {
         return "BOOKING_ACCEPTED".equals(normalized)
                 || "BOOKING_PAYMENT_SUCCESS".equals(normalized)
                 || "BOOKING_PROVIDER_ARRIVED".equals(normalized)
+                || "BOOKING_WORK_STARTED".equals(normalized)
                 || "BOOKING_CANCELLED".equals(normalized)
                 || "BOOKING_COMPLETED".equals(normalized)
+                || "BOOKING_ASSIGNED".equals(normalized)
                 || "BOOKING_PAYMENT_SUCCESS_PROVIDER".equals(normalized)
+                || "BOOKING_ARRIVAL_RECORDED_PROVIDER".equals(normalized)
                 || "BOOKING_CANCELLED_PROVIDER".equals(normalized)
-                || "BOOKING_WORK_STARTED_PROVIDER".equals(normalized);
+                || "BOOKING_WORK_STARTED_PROVIDER".equals(normalized)
+                || "BOOKING_COMPLETED_PROVIDER".equals(normalized);
     }
 
     private String targetAppContext(String type, Map<String, Object> payload) {

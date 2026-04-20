@@ -1,6 +1,7 @@
 package com.msa.booking.payment.booking.service.impl;
 
 import com.msa.booking.payment.booking.dto.ProviderActiveBookingData;
+import com.msa.booking.payment.booking.dto.ProviderBookingHistoryData;
 import com.msa.booking.payment.booking.dto.ProviderPendingBookingRequestData;
 import com.msa.booking.payment.booking.dto.UserBookingRequestStatusData;
 import com.msa.booking.payment.booking.service.BookingRequestQueryService;
@@ -147,6 +148,38 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                     ua.city,
                     ua.state,
                     ua.postal_code,
+                    CASE
+                        WHEN b.provider_entity_type = 'LABOUR' THEN (
+                            SELECT lsa.center_latitude
+                            FROM labour_service_areas lsa
+                            WHERE lsa.labour_id = b.provider_entity_id
+                            ORDER BY lsa.id DESC
+                            LIMIT 1
+                        )
+                        ELSE (
+                            SELECT psa.center_latitude
+                            FROM provider_service_areas psa
+                            WHERE psa.provider_id = b.provider_entity_id
+                            ORDER BY psa.id DESC
+                            LIMIT 1
+                        )
+                    END AS provider_latitude,
+                    CASE
+                        WHEN b.provider_entity_type = 'LABOUR' THEN (
+                            SELECT lsa.center_longitude
+                            FROM labour_service_areas lsa
+                            WHERE lsa.labour_id = b.provider_entity_id
+                            ORDER BY lsa.id DESC
+                            LIMIT 1
+                        )
+                        ELSE (
+                            SELECT psa.center_longitude
+                            FROM provider_service_areas psa
+                            WHERE psa.provider_id = b.provider_entity_id
+                            ORDER BY psa.id DESC
+                            LIMIT 1
+                        )
+                    END AS provider_longitude,
                     ua.latitude,
                     ua.longitude,
                     start_otp.otp_code AS start_otp_code,
@@ -259,6 +292,8 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                     rs.getString("city"),
                     rs.getString("state"),
                     rs.getString("postal_code"),
+                    toBigDecimal(rs.getObject("provider_latitude")),
+                    toBigDecimal(rs.getObject("provider_longitude")),
                     toBigDecimal(rs.getObject("latitude")),
                     toBigDecimal(rs.getObject("longitude")),
                     rs.getString("start_otp_code"),
@@ -314,6 +349,8 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 raw.city(),
                 raw.state(),
                 raw.postalCode(),
+                raw.providerLatitude(),
+                raw.providerLongitude(),
                 raw.destinationLatitude(),
                 raw.destinationLongitude(),
                 startOtpCode,
@@ -323,6 +360,87 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 raw.mutualCancelOtpCode(),
                 raw.mutualCancelOtpExpiresAt()
         );
+    }
+
+    @Override
+    public List<ProviderBookingHistoryData> historyForProvider(Long actingUserId, ProviderEntityType providerEntityType) {
+        return jdbcTemplate.query("""
+                SELECT
+                    b.id AS booking_id,
+                    b.booking_code,
+                    b.booking_type,
+                    b.provider_entity_type,
+                    b.provider_entity_id,
+                    b.booking_status,
+                    b.payment_status,
+                    COALESCE(up.full_name, CONCAT('User ', u.id)) AS customer_name,
+                    u.phone AS customer_phone,
+                    COALESCE(brc.quoted_price_amount, b.total_final_amount, b.total_estimated_amount, b.subtotal_amount, 0) AS quoted_price_amount,
+                    COALESCE(brc.distance_km, 0) AS distance_km,
+                    b.scheduled_start_at,
+                    b.created_at,
+                    COALESCE(psc.name, pc.name, lc.name, 'Booking') AS category_label,
+                    br.labour_pricing_model
+                FROM bookings b
+                INNER JOIN users u ON u.id = b.user_id
+                LEFT JOIN user_profiles up ON up.user_id = u.id
+                LEFT JOIN booking_requests br ON br.id = b.booking_request_id
+                LEFT JOIN booking_request_candidates brc
+                       ON brc.id = (
+                            SELECT brc2.id
+                            FROM booking_request_candidates brc2
+                            WHERE brc2.request_id = br.id
+                              AND brc2.provider_entity_type = b.provider_entity_type
+                              AND brc2.provider_entity_id = b.provider_entity_id
+                            ORDER BY
+                                CASE brc2.candidate_status
+                                    WHEN 'ACCEPTED' THEN 0
+                                    WHEN 'CONVERTED_TO_BOOKING' THEN 1
+                                    ELSE 9
+                                END,
+                                brc2.id DESC
+                            LIMIT 1
+                       )
+                LEFT JOIN labour_categories lc ON lc.id = br.category_id
+                LEFT JOIN provider_categories pc ON pc.id = br.category_id
+                LEFT JOIN provider_subcategories psc ON psc.id = br.subcategory_id
+                WHERE b.provider_entity_type = :providerEntityType
+                  AND (
+                        (:providerEntityType = 'LABOUR' AND EXISTS (
+                            SELECT 1
+                            FROM labour_profiles lp
+                            WHERE lp.id = b.provider_entity_id
+                              AND lp.user_id = :actingUserId
+                        ))
+                        OR
+                        (:providerEntityType = 'SERVICE_PROVIDER' AND EXISTS (
+                            SELECT 1
+                            FROM service_providers sp
+                            WHERE sp.id = b.provider_entity_id
+                              AND sp.user_id = :actingUserId
+                        ))
+                  )
+                ORDER BY b.created_at DESC
+                LIMIT 50
+                """, new MapSqlParameterSource()
+                .addValue("providerEntityType", providerEntityType.name())
+                .addValue("actingUserId", actingUserId), (rs, rowNum) -> new ProviderBookingHistoryData(
+                rs.getLong("booking_id"),
+                rs.getString("booking_code"),
+                BookingFlowType.valueOf(rs.getString("booking_type")),
+                ProviderEntityType.valueOf(rs.getString("provider_entity_type")),
+                rs.getLong("provider_entity_id"),
+                BookingLifecycleStatus.valueOf(rs.getString("booking_status")),
+                PayablePaymentStatus.valueOf(rs.getString("payment_status")),
+                rs.getString("customer_name"),
+                maskPhone(rs.getString("customer_phone")),
+                rs.getBigDecimal("quoted_price_amount"),
+                rs.getBigDecimal("distance_km"),
+                rs.getTimestamp("scheduled_start_at").toLocalDateTime(),
+                rs.getTimestamp("created_at").toLocalDateTime(),
+                rs.getString("category_label"),
+                rs.getString("labour_pricing_model")
+        ));
     }
 
     @Override
@@ -357,6 +475,19 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
     @Override
     public UserBookingRequestStatusData latestActiveForUser(Long actingUserId) {
         return activeForUser(actingUserId).stream().findFirst().orElse(null);
+    }
+
+    @Override
+    public List<UserBookingRequestStatusData> historyForUser(Long actingUserId) {
+        java.util.List<UserBookingRequestStatusData> history = new java.util.ArrayList<>();
+        for (BookingRequestEntity request : bookingRequestRepository.findTop50ByUserIdOrderByCreatedAtDesc(actingUserId)) {
+            BookingEntity booking = bookingRepository.findByBookingRequestIdOrderByIdAsc(request.getId())
+                    .stream()
+                    .findFirst()
+                    .orElse(null);
+            history.add(buildStatusData(request, booking));
+        }
+        return history;
     }
 
     private boolean isActiveForUser(BookingRequestEntity request, BookingEntity booking) {
@@ -470,7 +601,8 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 booking == null ? null : booking.getId(),
                 booking == null ? null : booking.getBookingCode(),
                 booking == null ? null : booking.getBookingStatus(),
-                booking == null ? null : booking.getPaymentStatus()
+                booking == null ? null : booking.getPaymentStatus(),
+                request.getCreatedAt()
         );
     }
 
