@@ -38,6 +38,7 @@ public record UserBookingRequestStatusData(
         String bookingCode,
         BookingLifecycleStatus bookingStatus,
         PayablePaymentStatus paymentStatus,
-        LocalDateTime createdAt
+        LocalDateTime createdAt,
+        boolean reviewSubmitted
 ) {
 }

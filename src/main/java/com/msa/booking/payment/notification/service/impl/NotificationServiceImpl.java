@@ -88,10 +88,12 @@ public class NotificationServiceImpl implements NotificationService {
                 Map<String, String> data = buildDataPayload(saved.getId(), type, title, body, payload);
                 boolean incomingBookingRequest = isIncomingBookingRequest(type);
                 boolean androidToken = "ANDROID".equalsIgnoreCase(pushToken.getPlatform());
+                boolean androidChannelManagedBookingPush =
+                        androidToken && (incomingBookingRequest || hasBookingUpdateSound(type));
                 Message.Builder messageBuilder = Message.builder()
                         .setToken(pushToken.getPushToken())
                         .putAllData(data);
-                if (!incomingBookingRequest || !androidToken) {
+                if (!androidChannelManagedBookingPush) {
                     messageBuilder.setNotification(Notification.builder().setTitle(title).setBody(body).build());
                 }
                 if (incomingBookingRequest) {
@@ -123,6 +125,9 @@ public class NotificationServiceImpl implements NotificationService {
                                     .setNotification(AndroidNotification.builder()
                                             .setChannelId(BOOKING_UPDATES_CHANNEL_ID)
                                             .setSound(BOOKING_UPDATES_SOUND_NAME)
+                                            .setPriority(AndroidNotification.Priority.HIGH)
+                                            .setVisibility(AndroidNotification.Visibility.PUBLIC)
+                                            .setDefaultVibrateTimings(true)
                                             .build())
                                     .build())
                             .setApnsConfig(ApnsConfig.builder()

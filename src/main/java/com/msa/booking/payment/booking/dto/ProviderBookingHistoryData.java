@@ -18,6 +18,7 @@ public record ProviderBookingHistoryData(
         String customerName,
         String customerPhone,
         BigDecimal quotedPriceAmount,
+        BigDecimal platformFeeAmount,
         BigDecimal distanceKm,
         LocalDateTime scheduledStartAt,
         LocalDateTime createdAt,

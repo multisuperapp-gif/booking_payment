@@ -141,6 +141,7 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                     COALESCE(up.full_name, CONCAT('User ', u.id)) AS customer_name,
                     u.phone AS customer_phone,
                     COALESCE(brc.quoted_price_amount, b.total_final_amount, b.total_estimated_amount, b.subtotal_amount, 0) AS quoted_price_amount,
+                    COALESCE(b.platform_fee_amount, 0) AS platform_fee_amount,
                     COALESCE(brc.distance_km, 0) AS distance_km,
                     b.scheduled_start_at,
                     b.created_at,
@@ -440,6 +441,7 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 rs.getString("customer_name"),
                 maskPhone(rs.getString("customer_phone")),
                 rs.getBigDecimal("quoted_price_amount"),
+                rs.getBigDecimal("platform_fee_amount"),
                 rs.getBigDecimal("distance_km"),
                 rs.getTimestamp("scheduled_start_at").toLocalDateTime(),
                 rs.getTimestamp("created_at").toLocalDateTime(),
@@ -542,12 +544,18 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
         }
 
         Long candidateId = acceptedCandidate == null ? null : acceptedCandidate.getId();
-        ProviderEntityType providerEntityType = acceptedCandidate == null ? null : acceptedCandidate.getProviderEntityType();
-        Long providerEntityId = acceptedCandidate == null ? null : acceptedCandidate.getProviderEntityId();
+        ProviderEntityType providerEntityType = booking != null && booking.getProviderEntityType() != null
+                ? booking.getProviderEntityType()
+                : (acceptedCandidate == null ? null : acceptedCandidate.getProviderEntityType());
+        Long providerEntityId = booking != null && booking.getProviderEntityId() != null
+                ? booking.getProviderEntityId()
+                : (acceptedCandidate == null ? null : acceptedCandidate.getProviderEntityId());
         String providerName = null;
         String providerPhone = null;
         ProviderLocationPhotoData providerLocationPhotoData = null;
-        java.math.BigDecimal quotedPriceAmount = acceptedCandidate == null ? null : acceptedCandidate.getQuotedPriceAmount();
+        java.math.BigDecimal quotedPriceAmount = acceptedCandidate != null
+                ? acceptedCandidate.getQuotedPriceAmount()
+                : (booking == null ? null : booking.getSubtotalAmount());
         java.math.BigDecimal totalAcceptedQuotedPriceAmount = requestBookings.stream()
                 .filter(candidateBooking -> candidateBooking.getBookingStatus() != BookingLifecycleStatus.CANCELLED)
                 .map(candidateBooking -> candidateBooking.getSubtotalAmount() == null ? BigDecimal.ZERO : candidateBooking.getSubtotalAmount())
@@ -560,18 +568,18 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 : BigDecimal.ZERO;
         java.math.BigDecimal distanceKm = acceptedCandidate == null ? null : acceptedCandidate.getDistanceKm();
 
-        if (acceptedCandidate != null) {
-            BookingParticipantContactProjection contact = acceptedCandidate.getProviderEntityType() == ProviderEntityType.LABOUR
-                    ? bookingSupportRepository.findLabourContact(acceptedCandidate.getProviderEntityId()).orElse(null)
-                    : bookingSupportRepository.findServiceProviderContact(acceptedCandidate.getProviderEntityId()).orElse(null);
+        if (providerEntityType != null && providerEntityId != null) {
+            BookingParticipantContactProjection contact = providerEntityType == ProviderEntityType.LABOUR
+                    ? bookingSupportRepository.findLabourContact(providerEntityId).orElse(null)
+                    : bookingSupportRepository.findServiceProviderContact(providerEntityId).orElse(null);
             if (contact != null) {
                 providerName = contact.getFullName();
                 boolean revealPhone = booking != null && booking.getPaymentStatus() == PayablePaymentStatus.PAID;
                 providerPhone = revealPhone ? contact.getPhone() : maskPhone(contact.getPhone());
             }
             providerLocationPhotoData = providerLocationPhoto(
-                    acceptedCandidate.getProviderEntityType(),
-                    acceptedCandidate.getProviderEntityId()
+                    providerEntityType,
+                    providerEntityId
             );
         }
 
@@ -585,6 +593,8 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                         .plusMinutes(resolveReachTimelineMinutes(request.getBookingType(), categoryLabel));
         boolean revealProviderLiveLocation = booking != null && booking.getPaymentStatus() == PayablePaymentStatus.PAID;
         String historyStatus = resolveHistoryStatus(booking);
+        boolean reviewSubmitted = booking != null
+                && bookingSupportRepository.countReviewsByReviewerAndBookingId(request.getUserId(), booking.getId()) > 0;
 
         return new UserBookingRequestStatusData(
                 request.getId(),
@@ -616,7 +626,8 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 booking == null ? null : booking.getBookingCode(),
                 booking == null ? null : booking.getBookingStatus(),
                 booking == null ? null : booking.getPaymentStatus(),
-                request.getCreatedAt()
+                request.getCreatedAt(),
+                reviewSubmitted
         );
     }
 
