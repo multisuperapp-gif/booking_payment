@@ -382,6 +382,7 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                     COALESCE(up.full_name, CONCAT('User ', u.id)) AS customer_name,
                     u.phone AS customer_phone,
                     COALESCE(brc.quoted_price_amount, b.total_final_amount, b.total_estimated_amount, b.subtotal_amount, 0) AS quoted_price_amount,
+                    COALESCE(b.platform_fee_amount, 0) AS platform_fee_amount,
                     COALESCE(brc.distance_km, 0) AS distance_km,
                     b.scheduled_start_at,
                     b.created_at,
