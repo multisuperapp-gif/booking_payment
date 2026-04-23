@@ -41,6 +41,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -98,6 +99,11 @@ class BookingLifecycleServiceImplTest {
         when(paymentRepository.save(any(PaymentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(refundRepository.save(any(RefundEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(bookingStatusHistoryRepository.findByBookingIdOrderByChangedAtAsc(anyLong())).thenReturn(List.of());
+        when(bookingPolicyService.resolveReachDeadline(any(), nullable(String.class), nullable(BigDecimal.class), any(LocalDateTime.class)))
+                .thenAnswer(invocation -> {
+                    LocalDateTime baseTime = invocation.getArgument(3);
+                    return baseTime == null ? null : baseTime.plusMinutes(15);
+                });
     }
 
     @Test

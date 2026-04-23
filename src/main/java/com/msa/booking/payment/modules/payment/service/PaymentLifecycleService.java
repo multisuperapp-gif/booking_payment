@@ -526,8 +526,6 @@ public class PaymentLifecycleService {
                    AND otp_status = 'GENERATED'
                 """, new MapSqlParameterSource("bookingId", booking.getId()));
 
-        LocalDateTime expiryBase = booking.getScheduledStartAt() == null ? LocalDateTime.now() : booking.getScheduledStartAt();
-        int reachMinutes = bookingPolicyService == null ? 45 : bookingPolicyService.noShowAutoCancelMinutes();
         jdbcTemplate.update("""
                 INSERT INTO booking_action_otps
                     (booking_id, otp_purpose, otp_code, issued_to_user_id, otp_status, expires_at)
@@ -537,7 +535,44 @@ public class PaymentLifecycleService {
                 .addValue("bookingId", booking.getId())
                 .addValue("otpCode", String.valueOf(ThreadLocalRandom.current().nextInt(100000, 1_000_000)))
                 .addValue("issuedToUserId", booking.getUserId())
-                .addValue("expiresAt", expiryBase.plusMinutes(reachMinutes)));
+                .addValue("expiresAt", resolveStartWorkOtpExpiry(booking)));
+    }
+
+    private LocalDateTime resolveStartWorkOtpExpiry(BookingEntity booking) {
+        if (booking == null) {
+            return LocalDateTime.now().plusMinutes(10);
+        }
+        if (booking.getBookingType() == com.msa.booking.payment.domain.enums.BookingFlowType.SERVICE) {
+            String categoryName = booking.getBookingRequestId() == null
+                    ? null
+                    : jdbcTemplate.query("""
+                    SELECT COALESCE(pc.name, 'Service')
+                    FROM booking_requests br
+                    LEFT JOIN provider_categories pc ON pc.id = br.category_id
+                    WHERE br.id = :requestId
+                    """, new MapSqlParameterSource("requestId", booking.getBookingRequestId()), rs -> rs.next() ? rs.getString(1) : null);
+            BigDecimal distanceKm = booking.getBookingRequestId() == null
+                    ? null
+                    : jdbcTemplate.query("""
+                    SELECT distance_km
+                    FROM booking_request_candidates
+                    WHERE request_id = :requestId
+                      AND provider_entity_type = :providerEntityType
+                      AND provider_entity_id = :providerEntityId
+                      AND candidate_status = 'ACCEPTED'
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """, new MapSqlParameterSource()
+                            .addValue("requestId", booking.getBookingRequestId())
+                            .addValue("providerEntityType", booking.getProviderEntityType().name())
+                            .addValue("providerEntityId", booking.getProviderEntityId()), rs -> rs.next() ? rs.getBigDecimal(1) : null);
+            LocalDateTime baseTime = LocalDateTime.now();
+            LocalDateTime expiresAt = bookingPolicyService.resolveServiceStartWorkOtpExpiry(categoryName, distanceKm, baseTime);
+            return expiresAt == null ? LocalDateTime.now().plusMinutes(bookingPolicyService.serviceDefaultReachTimelineMinutes()) : expiresAt;
+        }
+        LocalDateTime expiryBase = booking.getScheduledStartAt() == null ? LocalDateTime.now() : booking.getScheduledStartAt();
+        int reachMinutes = bookingPolicyService == null ? 45 : bookingPolicyService.noShowAutoCancelMinutes();
+        return expiryBase.plusMinutes(reachMinutes);
     }
 
     private void preparePayableForRetry(PaymentEntity payment) {

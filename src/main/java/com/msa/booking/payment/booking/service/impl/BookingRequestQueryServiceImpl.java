@@ -326,7 +326,17 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
         if ((raw.bookingStatus() == BookingLifecycleStatus.PAYMENT_COMPLETED
                 || raw.bookingStatus() == BookingLifecycleStatus.ARRIVED)
                 && (startOtpCode == null || startOtpCode.isBlank())) {
-            StartOtpData generatedStartOtp = prepareMissingStartOtp(raw.bookingId(), raw.reachByAt());
+            StartOtpData generatedStartOtp = prepareMissingStartOtp(
+                    raw.bookingId(),
+                    raw.bookingType(),
+                    raw.categoryLabel(),
+                    raw.distanceKm(),
+                    resolvePaymentCompletedBaseTime(
+                            raw.bookingId(),
+                            raw.scheduledStartAt()
+                    ),
+                    raw.reachByAt()
+            );
             startOtpCode = generatedStartOtp.otpCode();
             startOtpExpiresAt = generatedStartOtp.expiresAt();
         }
@@ -696,7 +706,14 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
         return bookingPolicyService.resolveReachDeadline(bookingType, categoryLabel, distanceKm, baseTime);
     }
 
-    private StartOtpData prepareMissingStartOtp(Long bookingId, LocalDateTime reachByAt) {
+    private StartOtpData prepareMissingStartOtp(
+            Long bookingId,
+            BookingFlowType bookingType,
+            String categoryLabel,
+            BigDecimal distanceKm,
+            LocalDateTime paymentCompletedAt,
+            LocalDateTime reachByAt
+    ) {
         jdbcTemplate.update("""
                 UPDATE booking_action_otps
                    SET otp_status = 'CANCELLED'
@@ -706,9 +723,20 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 """, new MapSqlParameterSource("bookingId", bookingId));
 
         String otpCode = String.valueOf(ThreadLocalRandom.current().nextInt(100000, 1_000_000));
-        LocalDateTime expiresAt = reachByAt == null
-                ? LocalDateTime.now().plusMinutes(bookingPolicyService.noShowAutoCancelMinutes())
-                : reachByAt.plusMinutes(bookingPolicyService.noShowAutoCancelMinutes());
+        LocalDateTime expiresAt;
+        if (bookingType == BookingFlowType.SERVICE) {
+            expiresAt = bookingPolicyService.resolveServiceStartWorkOtpExpiry(categoryLabel, distanceKm, paymentCompletedAt);
+            if (expiresAt == null && reachByAt != null && "automobile".equalsIgnoreCase(categoryLabel == null ? "" : categoryLabel.trim())) {
+                expiresAt = reachByAt.plusHours(1);
+            }
+            if (expiresAt == null) {
+                expiresAt = LocalDateTime.now().plusMinutes(bookingPolicyService.serviceDefaultReachTimelineMinutes());
+            }
+        } else {
+            expiresAt = reachByAt == null
+                    ? LocalDateTime.now().plusMinutes(bookingPolicyService.noShowAutoCancelMinutes())
+                    : reachByAt.plusMinutes(bookingPolicyService.noShowAutoCancelMinutes());
+        }
         jdbcTemplate.update("""
                 INSERT INTO booking_action_otps
                     (booking_id, otp_purpose, otp_code, issued_to_user_id, otp_status, expires_at)

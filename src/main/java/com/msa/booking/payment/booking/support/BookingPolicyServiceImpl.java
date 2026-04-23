@@ -91,6 +91,19 @@ public class BookingPolicyServiceImpl implements BookingPolicyService {
     }
 
     @Override
+    public LocalDateTime resolveServiceStartWorkOtpExpiry(String categoryName, BigDecimal distanceKm, LocalDateTime baseTime) {
+        if (baseTime == null) {
+            return null;
+        }
+        String normalizedCategory = normalizeCategory(categoryName);
+        if ("automobile".equals(normalizedCategory)) {
+            LocalDateTime reachDeadline = resolveReachDeadline(BookingFlowType.SERVICE, categoryName, distanceKm, baseTime);
+            return (reachDeadline == null ? baseTime : reachDeadline).plusHours(1);
+        }
+        return baseTime.plusMinutes(serviceDefaultReachTimelineMinutes());
+    }
+
+    @Override
     public int labourNoShowSuspendThreshold() {
         return resolveInt(BookingPaymentSettingsKeys.LABOUR_MONTHLY_NO_SHOW_SUSPEND_THRESHOLD, 2);
     }

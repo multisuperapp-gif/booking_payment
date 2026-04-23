@@ -411,8 +411,31 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
         otp.setOtpCode(String.valueOf(ThreadLocalRandom.current().nextInt(100000, 1_000_000)));
         otp.setIssuedToUserId(booking.getUserId());
         otp.setOtpStatus(BookingActionOtpStatus.GENERATED);
-        otp.setExpiresAt(booking.getScheduledStartAt().plusMinutes(bookingPolicyService.noShowAutoCancelMinutes()));
+        otp.setExpiresAt(resolveStartWorkOtpExpiry(booking));
         bookingActionOtpRepository.save(otp);
+    }
+
+    private LocalDateTime resolveStartWorkOtpExpiry(BookingEntity booking) {
+        if (booking == null) {
+            return LocalDateTime.now().plusMinutes(10);
+        }
+        if (booking.getBookingType() == BookingFlowType.SERVICE) {
+            String categoryName = booking.getBookingRequestId() == null
+                    ? null
+                    : bookingSupportRepository.findServiceCategoryNameByBookingRequestId(booking.getBookingRequestId()).orElse(null);
+            BigDecimal distanceKm = booking.getBookingRequestId() == null
+                    ? null
+                    : bookingSupportRepository.findAcceptedDistanceKmByBookingRequestId(
+                            booking.getBookingRequestId(),
+                            booking.getProviderEntityType().name(),
+                            booking.getProviderEntityId()
+                    ).orElse(null);
+            LocalDateTime baseTime = LocalDateTime.now();
+            LocalDateTime expiresAt = bookingPolicyService.resolveServiceStartWorkOtpExpiry(categoryName, distanceKm, baseTime);
+            return expiresAt == null ? LocalDateTime.now().plusMinutes(bookingPolicyService.serviceDefaultReachTimelineMinutes()) : expiresAt;
+        }
+        LocalDateTime fallbackBase = booking.getScheduledStartAt() != null ? booking.getScheduledStartAt() : LocalDateTime.now();
+        return fallbackBase.plusMinutes(bookingPolicyService.noShowAutoCancelMinutes());
     }
 
     private BigDecimal resolvePaymentAmount(BookingEntity booking) {

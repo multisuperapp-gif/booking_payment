@@ -25,6 +25,8 @@ public interface BookingPolicyService {
 
     LocalDateTime resolveReachDeadline(BookingFlowType bookingType, String categoryName, BigDecimal distanceKm, LocalDateTime baseTime);
 
+    LocalDateTime resolveServiceStartWorkOtpExpiry(String categoryName, BigDecimal distanceKm, LocalDateTime baseTime);
+
     int labourNoShowSuspendThreshold();
 
     int serviceNoShowSuspendThreshold();

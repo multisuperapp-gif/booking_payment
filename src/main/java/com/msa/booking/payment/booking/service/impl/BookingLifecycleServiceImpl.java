@@ -22,8 +22,6 @@ import java.util.Random;
 
 @Service
 public class BookingLifecycleServiceImpl implements BookingLifecycleService {
-    private static final int OTP_EXPIRY_MINUTES = 10;
-
     private final BookingRepository bookingRepository;
     private final PaymentRepository paymentRepository;
     private final BookingActionOtpRepository bookingActionOtpRepository;
@@ -93,6 +91,9 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
     @Transactional
     public BookingLifecycleData markArrived(Long bookingId) {
         BookingEntity booking = loadBooking(bookingId);
+        if (booking.getBookingType() == BookingFlowType.SERVICE) {
+            throw new BadRequestException("Arrival step is not required for service bookings.");
+        }
         if (booking.getBookingStatus() != BookingLifecycleStatus.PAYMENT_COMPLETED) {
             throw new BadRequestException("Booking can be marked arrived only after payment completion.");
         }
@@ -130,7 +131,7 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
         otp.setOtpCode(generateOtpCode());
         otp.setIssuedToUserId(booking.getUserId());
         otp.setOtpStatus(BookingActionOtpStatus.GENERATED);
-        otp.setExpiresAt(LocalDateTime.now().plusMinutes(OTP_EXPIRY_MINUTES));
+        otp.setExpiresAt(resolveOtpExpiry(booking, request.purpose()));
         bookingActionOtpRepository.save(otp);
         if (request.purpose() == BookingOtpPurpose.MUTUAL_CANCEL) {
             notifyProviderBookingUpdate(
@@ -161,6 +162,7 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
                 )
                 .orElseThrow(() -> new BadRequestException("Invalid booking OTP."));
         boolean ignoreExpiryForArrivedStartOtp = request.purpose() == BookingOtpPurpose.START_WORK
+                && booking.getBookingType() != BookingFlowType.SERVICE
                 && booking.getBookingStatus() == BookingLifecycleStatus.ARRIVED;
         if (!ignoreExpiryForArrivedStartOtp && otp.getExpiresAt().isBefore(LocalDateTime.now())) {
             otp.setOtpStatus(BookingActionOtpStatus.EXPIRED);
@@ -173,8 +175,10 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
 
         return switch (request.purpose()) {
             case START_WORK -> {
-                if (booking.getBookingStatus() != BookingLifecycleStatus.ARRIVED) {
-                    throw new BadRequestException("Start work OTP is valid only after arrival.");
+                if (!canStartWorkWithoutArrival(booking)) {
+                    throw new BadRequestException(booking.getBookingType() == BookingFlowType.SERVICE
+                            ? "Start work OTP is valid after payment confirmation for service bookings."
+                            : "Start work OTP is valid only after arrival.");
                 }
                 String oldStatus = booking.getBookingStatus().name();
                 booking.setBookingStatus(BookingLifecycleStatus.IN_PROGRESS);
@@ -357,8 +361,10 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
     private void validateOtpGeneration(BookingEntity booking, BookingOtpPurpose purpose) {
         switch (purpose) {
             case START_WORK -> {
-                if (booking.getBookingStatus() != BookingLifecycleStatus.ARRIVED) {
-                    throw new BadRequestException("Start work OTP can be generated only after arrival.");
+                if (!canStartWorkWithoutArrival(booking)) {
+                    throw new BadRequestException(booking.getBookingType() == BookingFlowType.SERVICE
+                            ? "Start work OTP can be generated after payment confirmation for service bookings."
+                            : "Start work OTP can be generated only after arrival.");
                 }
             }
             case COMPLETE_WORK -> {
@@ -385,6 +391,9 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
     }
 
     private void keepStartWorkOtpAvailableAfterArrival(BookingEntity booking) {
+        if (booking.getBookingType() == BookingFlowType.SERVICE) {
+            return;
+        }
         List<BookingActionOtpEntity> openOtps = bookingActionOtpRepository
                 .findByBookingIdAndOtpPurposeAndOtpStatus(
                         booking.getId(),
@@ -588,6 +597,18 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
         return reachDeadline != null && !now.isBefore(reachDeadline);
     }
 
+    private boolean canStartWorkWithoutArrival(BookingEntity booking) {
+        if (booking == null) {
+            return false;
+        }
+        BookingLifecycleStatus status = booking.getBookingStatus();
+        if (booking.getBookingType() == BookingFlowType.SERVICE) {
+            return status == BookingLifecycleStatus.PAYMENT_COMPLETED
+                    || status == BookingLifecycleStatus.ARRIVED;
+        }
+        return status == BookingLifecycleStatus.ARRIVED;
+    }
+
     private LocalDateTime resolvePaymentCompletedBaseTime(BookingEntity booking) {
         if (booking == null || booking.getId() == null) {
             return null;
@@ -608,22 +629,55 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
         if (booking == null) {
             return null;
         }
-        String categoryName = booking.getBookingType() == BookingFlowType.LABOUR || booking.getBookingRequestId() == null
-                ? null
-                : bookingSupportRepository.findServiceCategoryNameByBookingRequestId(booking.getBookingRequestId()).orElse(null);
-        BigDecimal distanceKm = booking.getBookingType() == BookingFlowType.LABOUR || booking.getBookingRequestId() == null
-                ? null
-                : bookingSupportRepository.findAcceptedDistanceKmByBookingRequestId(
-                        booking.getBookingRequestId(),
-                        booking.getProviderEntityType().name(),
-                        booking.getProviderEntityId()
-                ).orElse(null);
+        String categoryName = resolveServiceCategoryName(booking);
+        BigDecimal distanceKm = resolveAcceptedDistanceKm(booking);
         return bookingPolicyService.resolveReachDeadline(
                 booking.getBookingType(),
                 categoryName,
                 distanceKm,
                 resolvePaymentCompletedBaseTime(booking)
         );
+    }
+
+    private LocalDateTime resolveOtpExpiry(BookingEntity booking, BookingOtpPurpose purpose) {
+        if (purpose != BookingOtpPurpose.START_WORK) {
+            return LocalDateTime.now().plusMinutes(10);
+        }
+        if (booking == null) {
+            return LocalDateTime.now().plusMinutes(10);
+        }
+        if (booking.getBookingType() == BookingFlowType.SERVICE) {
+            LocalDateTime baseTime = resolvePaymentCompletedBaseTime(booking);
+            LocalDateTime expiresAt = bookingPolicyService.resolveServiceStartWorkOtpExpiry(
+                    resolveServiceCategoryName(booking),
+                    resolveAcceptedDistanceKm(booking),
+                    baseTime
+            );
+            return expiresAt == null ? LocalDateTime.now().plusMinutes(bookingPolicyService.serviceDefaultReachTimelineMinutes()) : expiresAt;
+        }
+        if (booking.getBookingStatus() == BookingLifecycleStatus.ARRIVED) {
+            return LocalDateTime.now().plusDays(1);
+        }
+        LocalDateTime fallbackBase = booking.getScheduledStartAt() != null ? booking.getScheduledStartAt() : LocalDateTime.now();
+        return fallbackBase.plusMinutes(bookingPolicyService.noShowAutoCancelMinutes());
+    }
+
+    private String resolveServiceCategoryName(BookingEntity booking) {
+        if (booking == null || booking.getBookingType() == BookingFlowType.LABOUR || booking.getBookingRequestId() == null) {
+            return null;
+        }
+        return bookingSupportRepository.findServiceCategoryNameByBookingRequestId(booking.getBookingRequestId()).orElse(null);
+    }
+
+    private BigDecimal resolveAcceptedDistanceKm(BookingEntity booking) {
+        if (booking == null || booking.getBookingType() == BookingFlowType.LABOUR || booking.getBookingRequestId() == null) {
+            return null;
+        }
+        return bookingSupportRepository.findAcceptedDistanceKmByBookingRequestId(
+                booking.getBookingRequestId(),
+                booking.getProviderEntityType().name(),
+                booking.getProviderEntityId()
+        ).orElse(null);
     }
 
     private void releaseCapacityIfNeeded(BookingEntity booking) {
