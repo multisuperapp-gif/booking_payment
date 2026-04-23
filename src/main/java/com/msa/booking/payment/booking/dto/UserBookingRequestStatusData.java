@@ -13,6 +13,7 @@ public record UserBookingRequestStatusData(
         String requestCode,
         BookingFlowType bookingType,
         BookingRequestStatus requestStatus,
+        String historyStatus,
         Long candidateId,
         ProviderEntityType providerEntityType,
         Long providerEntityId,
@@ -36,6 +37,8 @@ public record UserBookingRequestStatusData(
         Long bookingId,
         String bookingCode,
         BookingLifecycleStatus bookingStatus,
-        PayablePaymentStatus paymentStatus
+        PayablePaymentStatus paymentStatus,
+        LocalDateTime createdAt,
+        boolean reviewSubmitted
 ) {
 }

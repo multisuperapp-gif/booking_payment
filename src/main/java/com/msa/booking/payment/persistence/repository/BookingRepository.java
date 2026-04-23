@@ -20,15 +20,15 @@ public interface BookingRepository extends JpaRepository<BookingEntity, Long> {
             LocalDateTime createdAt
     );
 
-    List<BookingEntity> findTop100ByBookingStatusAndPaymentStatusAndScheduledStartAtBefore(
+    List<BookingEntity> findTop100ByBookingStatusAndPaymentStatusAndCreatedAtBefore(
             BookingLifecycleStatus bookingStatus,
             PayablePaymentStatus paymentStatus,
-            LocalDateTime scheduledStartAt
+            LocalDateTime createdAt
     );
 
-    List<BookingEntity> findTop500ByBookingStatusAndPaymentStatusAndScheduledStartAtAfterOrderByScheduledStartAtAsc(
+    List<BookingEntity> findTop500ByBookingStatusAndPaymentStatusAndCreatedAtAfterOrderByCreatedAtAsc(
             BookingLifecycleStatus bookingStatus,
             PayablePaymentStatus paymentStatus,
-            LocalDateTime scheduledStartAt
+            LocalDateTime createdAt
     );
 }

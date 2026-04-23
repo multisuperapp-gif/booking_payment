@@ -8,6 +8,7 @@ import com.msa.booking.payment.booking.dto.CancelBookingRequestRequest;
 import com.msa.booking.payment.booking.dto.CreateBookingRequest;
 import com.msa.booking.payment.booking.dto.ExpireBookingRequestsResponse;
 import com.msa.booking.payment.booking.dto.ProviderActiveBookingData;
+import com.msa.booking.payment.booking.dto.ProviderBookingHistoryData;
 import com.msa.booking.payment.booking.dto.ProviderPendingBookingRequestData;
 import com.msa.booking.payment.booking.dto.RejectBookingCandidateRequest;
 import com.msa.booking.payment.booking.dto.UserBookingRequestStatusData;
@@ -67,6 +68,13 @@ public class BookingRequestController {
         return ApiResponse.ok(bookingRequestQueryService.activeForUser(userId));
     }
 
+    @GetMapping("/history")
+    public ApiResponse<List<UserBookingRequestStatusData>> historyForUser(
+            @RequestHeader("X-User-Id") Long userId
+    ) {
+        return ApiResponse.ok(bookingRequestQueryService.historyForUser(userId));
+    }
+
     @GetMapping("/provider/pending")
     public ApiResponse<List<ProviderPendingBookingRequestData>> providerPending(
             @RequestHeader("X-User-Id") Long userId,
@@ -81,6 +89,14 @@ public class BookingRequestController {
             @RequestParam ProviderEntityType providerEntityType
     ) {
         return ApiResponse.ok(bookingRequestQueryService.latestActiveForProvider(userId, providerEntityType));
+    }
+
+    @GetMapping("/provider/history")
+    public ApiResponse<List<ProviderBookingHistoryData>> providerHistory(
+            @RequestHeader("X-User-Id") Long userId,
+            @RequestParam ProviderEntityType providerEntityType
+    ) {
+        return ApiResponse.ok(bookingRequestQueryService.historyForProvider(userId, providerEntityType));
     }
 
     @PostMapping

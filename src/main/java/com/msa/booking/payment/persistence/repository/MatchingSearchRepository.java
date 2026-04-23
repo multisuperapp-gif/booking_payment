@@ -47,6 +47,16 @@ public interface MatchingSearchRepository extends Repository<BookingRequestEntit
                   AND b.provider_entity_id = lp.id
                   AND b.booking_status IN ('ACCEPTED','PAYMENT_PENDING','PAYMENT_COMPLETED','ARRIVED','IN_PROGRESS')
               )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM booking_request_candidates brc
+                JOIN booking_requests br ON br.id = brc.request_id
+                WHERE brc.provider_entity_type = 'LABOUR'
+                  AND brc.provider_entity_id = lp.id
+                  AND brc.candidate_status = 'ACCEPTED'
+                  AND br.request_status IN ('OPEN', 'ACCEPTED')
+                  AND (br.request_status <> 'OPEN' OR br.expires_at > CURRENT_TIMESTAMP)
+              )
             GROUP BY lp.id
             HAVING quotedPriceAmount > 0
                AND (:priceMin IS NULL OR quotedPriceAmount >= :priceMin)

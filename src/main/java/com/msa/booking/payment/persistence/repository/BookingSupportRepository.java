@@ -45,6 +45,68 @@ public interface BookingSupportRepository extends Repository<BookingEntity, Long
     Optional<Long> findServiceProviderUserId(@Param("providerId") Long providerId);
 
     @Query(value = """
+            SELECT COUNT(*)
+            FROM reviews
+            WHERE reviewer_user_id = :reviewerUserId
+              AND booking_id = :bookingId
+            """, nativeQuery = true)
+    long countReviewsByReviewerAndBookingId(
+            @Param("reviewerUserId") Long reviewerUserId,
+            @Param("bookingId") Long bookingId
+    );
+
+    @Modifying
+    @Query(value = """
+            INSERT INTO reviews
+                (reviewer_user_id, target_type, target_id, booking_id, rating, comment, review_status)
+            VALUES
+                (:reviewerUserId, :targetType, :targetId, :bookingId, :rating, NULLIF(:comment, ''), 'VISIBLE')
+            """, nativeQuery = true)
+    int insertBookingReview(
+            @Param("reviewerUserId") Long reviewerUserId,
+            @Param("targetType") String targetType,
+            @Param("targetId") Long targetId,
+            @Param("bookingId") Long bookingId,
+            @Param("rating") int rating,
+            @Param("comment") String comment
+    );
+
+    @Modifying
+    @Query(value = """
+            UPDATE labour_profiles lp
+               SET lp.avg_rating = COALESCE((
+                    SELECT ROUND(AVG(r.rating), 2)
+                    FROM reviews r
+                    WHERE r.target_type = 'LABOUR'
+                      AND r.target_id = :labourId
+                      AND r.review_status = 'VISIBLE'
+               ), 0.00)
+             WHERE lp.id = :labourId
+            """, nativeQuery = true)
+    int refreshLabourRating(@Param("labourId") Long labourId);
+
+    @Modifying
+    @Query(value = """
+            UPDATE service_providers sp
+               SET sp.avg_rating = COALESCE((
+                        SELECT ROUND(AVG(r.rating), 2)
+                        FROM reviews r
+                        WHERE r.target_type = 'SERVICE_PROVIDER'
+                          AND r.target_id = :providerId
+                          AND r.review_status = 'VISIBLE'
+                   ), 0.00),
+                   sp.total_reviews = (
+                        SELECT COUNT(*)
+                        FROM reviews r
+                        WHERE r.target_type = 'SERVICE_PROVIDER'
+                          AND r.target_id = :providerId
+                          AND r.review_status = 'VISIBLE'
+                   )
+             WHERE sp.id = :providerId
+            """, nativeQuery = true)
+    int refreshServiceProviderRating(@Param("providerId") Long providerId);
+
+    @Query(value = """
             SELECT LOWER(pc.name)
             FROM booking_requests br
             JOIN provider_categories pc ON pc.id = br.category_id

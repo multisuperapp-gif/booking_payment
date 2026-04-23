@@ -39,4 +39,12 @@ public class BookingLifecycleController {
     public ApiResponse<BookingLifecycleData> userCancel(@Valid @RequestBody UserCancelBookingRequest request) {
         return ApiResponse.success("Booking cancellation processed successfully", bookingLifecycleService.cancelByUser(request));
     }
+
+    @PostMapping("/review")
+    public ApiResponse<BookingReviewData> submitReview(
+            @RequestHeader("X-User-Id") Long userId,
+            @Valid @RequestBody SubmitBookingReviewRequest request
+    ) {
+        return ApiResponse.success("Booking review submitted successfully", bookingLifecycleService.submitReview(userId, request));
+    }
 }

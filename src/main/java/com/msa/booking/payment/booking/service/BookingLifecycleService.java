@@ -12,4 +12,6 @@ public interface BookingLifecycleService {
     BookingLifecycleData verifyOtpAndApply(VerifyBookingOtpRequest request);
 
     BookingLifecycleData cancelByUser(UserCancelBookingRequest request);
+
+    BookingReviewData submitReview(Long actingUserId, SubmitBookingReviewRequest request);
 }

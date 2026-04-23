@@ -1,6 +1,7 @@
 package com.msa.booking.payment.booking.service.impl;
 
 import com.msa.booking.payment.booking.dto.ProviderActiveBookingData;
+import com.msa.booking.payment.booking.dto.ProviderBookingHistoryData;
 import com.msa.booking.payment.booking.dto.ProviderPendingBookingRequestData;
 import com.msa.booking.payment.booking.dto.UserBookingRequestStatusData;
 import com.msa.booking.payment.booking.service.BookingRequestQueryService;
@@ -15,10 +16,12 @@ import com.msa.booking.payment.domain.enums.ProviderEntityType;
 import com.msa.booking.payment.persistence.entity.BookingEntity;
 import com.msa.booking.payment.persistence.entity.BookingRequestCandidateEntity;
 import com.msa.booking.payment.persistence.entity.BookingRequestEntity;
+import com.msa.booking.payment.persistence.entity.BookingStatusHistoryEntity;
 import com.msa.booking.payment.persistence.repository.BookingParticipantContactProjection;
 import com.msa.booking.payment.persistence.repository.BookingRepository;
 import com.msa.booking.payment.persistence.repository.BookingRequestCandidateRepository;
 import com.msa.booking.payment.persistence.repository.BookingRequestRepository;
+import com.msa.booking.payment.persistence.repository.BookingStatusHistoryRepository;
 import com.msa.booking.payment.persistence.repository.BookingSupportRepository;
 import java.math.BigDecimal;
 import java.sql.Timestamp;
@@ -36,6 +39,7 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
     private final BookingRequestRepository bookingRequestRepository;
     private final BookingRequestCandidateRepository bookingRequestCandidateRepository;
     private final BookingRepository bookingRepository;
+    private final BookingStatusHistoryRepository bookingStatusHistoryRepository;
     private final BookingPolicyService bookingPolicyService;
 
     public BookingRequestQueryServiceImpl(
@@ -44,6 +48,7 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
             BookingRequestRepository bookingRequestRepository,
             BookingRequestCandidateRepository bookingRequestCandidateRepository,
             BookingRepository bookingRepository,
+            BookingStatusHistoryRepository bookingStatusHistoryRepository,
             BookingPolicyService bookingPolicyService
     ) {
         this.jdbcTemplate = jdbcTemplate;
@@ -51,6 +56,7 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
         this.bookingRequestRepository = bookingRequestRepository;
         this.bookingRequestCandidateRepository = bookingRequestCandidateRepository;
         this.bookingRepository = bookingRepository;
+        this.bookingStatusHistoryRepository = bookingStatusHistoryRepository;
         this.bookingPolicyService = bookingPolicyService;
     }
 
@@ -84,6 +90,8 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 WHERE brc.provider_entity_type = :providerEntityType
                   AND brc.candidate_status = 'PENDING'
                   AND br.request_status = 'OPEN'
+                  AND br.expires_at > CURRENT_TIMESTAMP
+                  AND brc.expires_at > CURRENT_TIMESTAMP
                   AND (
                         (:providerEntityType = 'LABOUR' AND EXISTS (
                             SELECT 1
@@ -133,6 +141,7 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                     COALESCE(up.full_name, CONCAT('User ', u.id)) AS customer_name,
                     u.phone AS customer_phone,
                     COALESCE(brc.quoted_price_amount, b.total_final_amount, b.total_estimated_amount, b.subtotal_amount, 0) AS quoted_price_amount,
+                    COALESCE(b.platform_fee_amount, 0) AS platform_fee_amount,
                     COALESCE(brc.distance_km, 0) AS distance_km,
                     b.scheduled_start_at,
                     b.created_at,
@@ -145,6 +154,38 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                     ua.city,
                     ua.state,
                     ua.postal_code,
+                    CASE
+                        WHEN b.provider_entity_type = 'LABOUR' THEN (
+                            SELECT lsa.center_latitude
+                            FROM labour_service_areas lsa
+                            WHERE lsa.labour_id = b.provider_entity_id
+                            ORDER BY lsa.id DESC
+                            LIMIT 1
+                        )
+                        ELSE (
+                            SELECT psa.center_latitude
+                            FROM provider_service_areas psa
+                            WHERE psa.provider_id = b.provider_entity_id
+                            ORDER BY psa.id DESC
+                            LIMIT 1
+                        )
+                    END AS provider_latitude,
+                    CASE
+                        WHEN b.provider_entity_type = 'LABOUR' THEN (
+                            SELECT lsa.center_longitude
+                            FROM labour_service_areas lsa
+                            WHERE lsa.labour_id = b.provider_entity_id
+                            ORDER BY lsa.id DESC
+                            LIMIT 1
+                        )
+                        ELSE (
+                            SELECT psa.center_longitude
+                            FROM provider_service_areas psa
+                            WHERE psa.provider_id = b.provider_entity_id
+                            ORDER BY psa.id DESC
+                            LIMIT 1
+                        )
+                    END AS provider_longitude,
                     ua.latitude,
                     ua.longitude,
                     start_otp.otp_code AS start_otp_code,
@@ -247,7 +288,7 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                     rs.getBigDecimal("distance_km"),
                     scheduledStartAt,
                     createdAt.plusSeconds(bookingPolicyService.acceptedPaymentTimeoutSeconds()),
-                    scheduledStartAt.plusMinutes(resolveReachTimelineMinutes(bookingType, categoryLabel)),
+                    createdAt.plusMinutes(resolveReachTimelineMinutes(bookingType, categoryLabel)),
                     categoryLabel,
                     rs.getString("labour_pricing_model"),
                     rs.getString("address_label"),
@@ -257,6 +298,8 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                     rs.getString("city"),
                     rs.getString("state"),
                     rs.getString("postal_code"),
+                    toBigDecimal(rs.getObject("provider_latitude")),
+                    toBigDecimal(rs.getObject("provider_longitude")),
                     toBigDecimal(rs.getObject("latitude")),
                     toBigDecimal(rs.getObject("longitude")),
                     rs.getString("start_otp_code"),
@@ -276,7 +319,7 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
         if ((raw.bookingStatus() == BookingLifecycleStatus.PAYMENT_COMPLETED
                 || raw.bookingStatus() == BookingLifecycleStatus.ARRIVED)
                 && (startOtpCode == null || startOtpCode.isBlank())) {
-            StartOtpData generatedStartOtp = prepareMissingStartOtp(raw.bookingId(), raw.scheduledStartAt());
+            StartOtpData generatedStartOtp = prepareMissingStartOtp(raw.bookingId(), raw.reachByAt());
             startOtpCode = generatedStartOtp.otpCode();
             startOtpExpiresAt = generatedStartOtp.expiresAt();
         }
@@ -312,6 +355,8 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 raw.city(),
                 raw.state(),
                 raw.postalCode(),
+                raw.providerLatitude(),
+                raw.providerLongitude(),
                 raw.destinationLatitude(),
                 raw.destinationLongitude(),
                 startOtpCode,
@@ -321,6 +366,89 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 raw.mutualCancelOtpCode(),
                 raw.mutualCancelOtpExpiresAt()
         );
+    }
+
+    @Override
+    public List<ProviderBookingHistoryData> historyForProvider(Long actingUserId, ProviderEntityType providerEntityType) {
+        return jdbcTemplate.query("""
+                SELECT
+                    b.id AS booking_id,
+                    b.booking_code,
+                    b.booking_type,
+                    b.provider_entity_type,
+                    b.provider_entity_id,
+                    b.booking_status,
+                    b.payment_status,
+                    COALESCE(up.full_name, CONCAT('User ', u.id)) AS customer_name,
+                    u.phone AS customer_phone,
+                    COALESCE(brc.quoted_price_amount, b.total_final_amount, b.total_estimated_amount, b.subtotal_amount, 0) AS quoted_price_amount,
+                    COALESCE(b.platform_fee_amount, 0) AS platform_fee_amount,
+                    COALESCE(brc.distance_km, 0) AS distance_km,
+                    b.scheduled_start_at,
+                    b.created_at,
+                    COALESCE(psc.name, pc.name, lc.name, 'Booking') AS category_label,
+                    br.labour_pricing_model
+                FROM bookings b
+                INNER JOIN users u ON u.id = b.user_id
+                LEFT JOIN user_profiles up ON up.user_id = u.id
+                LEFT JOIN booking_requests br ON br.id = b.booking_request_id
+                LEFT JOIN booking_request_candidates brc
+                       ON brc.id = (
+                            SELECT brc2.id
+                            FROM booking_request_candidates brc2
+                            WHERE brc2.request_id = br.id
+                              AND brc2.provider_entity_type = b.provider_entity_type
+                              AND brc2.provider_entity_id = b.provider_entity_id
+                            ORDER BY
+                                CASE brc2.candidate_status
+                                    WHEN 'ACCEPTED' THEN 0
+                                    WHEN 'CONVERTED_TO_BOOKING' THEN 1
+                                    ELSE 9
+                                END,
+                                brc2.id DESC
+                            LIMIT 1
+                       )
+                LEFT JOIN labour_categories lc ON lc.id = br.category_id
+                LEFT JOIN provider_categories pc ON pc.id = br.category_id
+                LEFT JOIN provider_subcategories psc ON psc.id = br.subcategory_id
+                WHERE b.provider_entity_type = :providerEntityType
+                  AND (
+                        (:providerEntityType = 'LABOUR' AND EXISTS (
+                            SELECT 1
+                            FROM labour_profiles lp
+                            WHERE lp.id = b.provider_entity_id
+                              AND lp.user_id = :actingUserId
+                        ))
+                        OR
+                        (:providerEntityType = 'SERVICE_PROVIDER' AND EXISTS (
+                            SELECT 1
+                            FROM service_providers sp
+                            WHERE sp.id = b.provider_entity_id
+                              AND sp.user_id = :actingUserId
+                        ))
+                  )
+                ORDER BY b.created_at DESC
+                LIMIT 50
+                """, new MapSqlParameterSource()
+                .addValue("providerEntityType", providerEntityType.name())
+                .addValue("actingUserId", actingUserId), (rs, rowNum) -> new ProviderBookingHistoryData(
+                rs.getLong("booking_id"),
+                rs.getString("booking_code"),
+                BookingFlowType.valueOf(rs.getString("booking_type")),
+                ProviderEntityType.valueOf(rs.getString("provider_entity_type")),
+                rs.getLong("provider_entity_id"),
+                BookingLifecycleStatus.valueOf(rs.getString("booking_status")),
+                PayablePaymentStatus.valueOf(rs.getString("payment_status")),
+                rs.getString("customer_name"),
+                maskPhone(rs.getString("customer_phone")),
+                rs.getBigDecimal("quoted_price_amount"),
+                rs.getBigDecimal("platform_fee_amount"),
+                rs.getBigDecimal("distance_km"),
+                rs.getTimestamp("scheduled_start_at").toLocalDateTime(),
+                rs.getTimestamp("created_at").toLocalDateTime(),
+                rs.getString("category_label"),
+                rs.getString("labour_pricing_model")
+        ));
     }
 
     @Override
@@ -355,6 +483,26 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
     @Override
     public UserBookingRequestStatusData latestActiveForUser(Long actingUserId) {
         return activeForUser(actingUserId).stream().findFirst().orElse(null);
+    }
+
+    @Override
+    public List<UserBookingRequestStatusData> historyForUser(Long actingUserId) {
+        java.util.List<UserBookingRequestStatusData> history = new java.util.ArrayList<>();
+        for (BookingRequestEntity request : bookingRequestRepository.findTop50ByUserIdOrderByCreatedAtDesc(actingUserId)) {
+            BookingEntity booking = bookingRepository.findByBookingRequestIdOrderByIdAsc(request.getId())
+                    .stream()
+                    .findFirst()
+                    .orElse(null);
+            if (booking == null || booking.getBookingStatus() == null) {
+                continue;
+            }
+            if (booking.getBookingStatus() != BookingLifecycleStatus.COMPLETED
+                    && booking.getBookingStatus() != BookingLifecycleStatus.CANCELLED) {
+                continue;
+            }
+            history.add(buildStatusData(request, booking));
+        }
+        return history;
     }
 
     private boolean isActiveForUser(BookingRequestEntity request, BookingEntity booking) {
@@ -397,12 +545,18 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
         }
 
         Long candidateId = acceptedCandidate == null ? null : acceptedCandidate.getId();
-        ProviderEntityType providerEntityType = acceptedCandidate == null ? null : acceptedCandidate.getProviderEntityType();
-        Long providerEntityId = acceptedCandidate == null ? null : acceptedCandidate.getProviderEntityId();
+        ProviderEntityType providerEntityType = booking != null && booking.getProviderEntityType() != null
+                ? booking.getProviderEntityType()
+                : (acceptedCandidate == null ? null : acceptedCandidate.getProviderEntityType());
+        Long providerEntityId = booking != null && booking.getProviderEntityId() != null
+                ? booking.getProviderEntityId()
+                : (acceptedCandidate == null ? null : acceptedCandidate.getProviderEntityId());
         String providerName = null;
         String providerPhone = null;
         ProviderLocationPhotoData providerLocationPhotoData = null;
-        java.math.BigDecimal quotedPriceAmount = acceptedCandidate == null ? null : acceptedCandidate.getQuotedPriceAmount();
+        java.math.BigDecimal quotedPriceAmount = acceptedCandidate != null
+                ? acceptedCandidate.getQuotedPriceAmount()
+                : (booking == null ? null : booking.getSubtotalAmount());
         java.math.BigDecimal totalAcceptedQuotedPriceAmount = requestBookings.stream()
                 .filter(candidateBooking -> candidateBooking.getBookingStatus() != BookingLifecycleStatus.CANCELLED)
                 .map(candidateBooking -> candidateBooking.getSubtotalAmount() == null ? BigDecimal.ZERO : candidateBooking.getSubtotalAmount())
@@ -415,18 +569,18 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 : BigDecimal.ZERO;
         java.math.BigDecimal distanceKm = acceptedCandidate == null ? null : acceptedCandidate.getDistanceKm();
 
-        if (acceptedCandidate != null) {
-            BookingParticipantContactProjection contact = acceptedCandidate.getProviderEntityType() == ProviderEntityType.LABOUR
-                    ? bookingSupportRepository.findLabourContact(acceptedCandidate.getProviderEntityId()).orElse(null)
-                    : bookingSupportRepository.findServiceProviderContact(acceptedCandidate.getProviderEntityId()).orElse(null);
+        if (providerEntityType != null && providerEntityId != null) {
+            BookingParticipantContactProjection contact = providerEntityType == ProviderEntityType.LABOUR
+                    ? bookingSupportRepository.findLabourContact(providerEntityId).orElse(null)
+                    : bookingSupportRepository.findServiceProviderContact(providerEntityId).orElse(null);
             if (contact != null) {
                 providerName = contact.getFullName();
                 boolean revealPhone = booking != null && booking.getPaymentStatus() == PayablePaymentStatus.PAID;
                 providerPhone = revealPhone ? contact.getPhone() : maskPhone(contact.getPhone());
             }
             providerLocationPhotoData = providerLocationPhoto(
-                    acceptedCandidate.getProviderEntityType(),
-                    acceptedCandidate.getProviderEntityId()
+                    providerEntityType,
+                    providerEntityId
             );
         }
 
@@ -434,16 +588,21 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 ? null
                 : booking.getCreatedAt().plusSeconds(bookingPolicyService.acceptedPaymentTimeoutSeconds());
         String categoryLabel = resolveCategoryLabel(request);
-        LocalDateTime reachByAt = booking == null || booking.getScheduledStartAt() == null
+        LocalDateTime reachByAt = booking == null || (booking.getCreatedAt() == null && booking.getScheduledStartAt() == null)
                 ? null
-                : booking.getScheduledStartAt().plusMinutes(resolveReachTimelineMinutes(request.getBookingType(), categoryLabel));
+                : (booking.getCreatedAt() != null ? booking.getCreatedAt() : booking.getScheduledStartAt())
+                        .plusMinutes(resolveReachTimelineMinutes(request.getBookingType(), categoryLabel));
         boolean revealProviderLiveLocation = booking != null && booking.getPaymentStatus() == PayablePaymentStatus.PAID;
+        String historyStatus = resolveHistoryStatus(booking);
+        boolean reviewSubmitted = booking != null
+                && bookingSupportRepository.countReviewsByReviewerAndBookingId(request.getUserId(), booking.getId()) > 0;
 
         return new UserBookingRequestStatusData(
                 request.getId(),
                 request.getRequestCode(),
                 request.getBookingType(),
                 request.getRequestStatus(),
+                historyStatus,
                 candidateId,
                 providerEntityType,
                 providerEntityId,
@@ -467,8 +626,37 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 booking == null ? null : booking.getId(),
                 booking == null ? null : booking.getBookingCode(),
                 booking == null ? null : booking.getBookingStatus(),
-                booking == null ? null : booking.getPaymentStatus()
+                booking == null ? null : booking.getPaymentStatus(),
+                request.getCreatedAt(),
+                reviewSubmitted
         );
+    }
+
+    private String resolveHistoryStatus(BookingEntity booking) {
+        if (booking == null || booking.getBookingStatus() == null) {
+            return "";
+        }
+        if (booking.getBookingStatus() == BookingLifecycleStatus.COMPLETED) {
+            return "COMPLETED";
+        }
+        if (booking.getBookingStatus() == BookingLifecycleStatus.CANCELLED) {
+            if (booking.getPaymentStatus() == PayablePaymentStatus.FAILED) {
+                return "PAYMENT_FAILED";
+            }
+            BookingStatusHistoryEntity latestHistory = bookingStatusHistoryRepository
+                    .findByBookingIdOrderByChangedAtAsc(booking.getId())
+                    .stream()
+                    .reduce((first, second) -> second)
+                    .orElse(null);
+            String reason = latestHistory == null || latestHistory.getReason() == null
+                    ? ""
+                    : latestHistory.getReason().trim().toUpperCase();
+            if (reason.contains("NO_SHOW") || reason.contains("NO SHOW")) {
+                return "NO_SHOW";
+            }
+            return "CANCELLED";
+        }
+        return booking.getBookingStatus().name();
     }
 
     private String maskPhone(String phone) {
@@ -491,7 +679,7 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 : bookingPolicyService.serviceDefaultReachTimelineMinutes();
     }
 
-    private StartOtpData prepareMissingStartOtp(Long bookingId, LocalDateTime scheduledStartAt) {
+    private StartOtpData prepareMissingStartOtp(Long bookingId, LocalDateTime reachByAt) {
         jdbcTemplate.update("""
                 UPDATE booking_action_otps
                    SET otp_status = 'CANCELLED'
@@ -501,8 +689,9 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 """, new MapSqlParameterSource("bookingId", bookingId));
 
         String otpCode = String.valueOf(ThreadLocalRandom.current().nextInt(100000, 1_000_000));
-        LocalDateTime expiryBase = scheduledStartAt == null ? LocalDateTime.now() : scheduledStartAt;
-        LocalDateTime expiresAt = expiryBase.plusMinutes(bookingPolicyService.noShowAutoCancelMinutes());
+        LocalDateTime expiresAt = reachByAt == null
+                ? LocalDateTime.now().plusMinutes(bookingPolicyService.noShowAutoCancelMinutes())
+                : reachByAt.plusMinutes(bookingPolicyService.noShowAutoCancelMinutes());
         jdbcTemplate.update("""
                 INSERT INTO booking_action_otps
                     (booking_id, otp_purpose, otp_code, issued_to_user_id, otp_status, expires_at)

@@ -307,6 +307,47 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
         throw new BadRequestException("User cancellation is not allowed for the current booking state.");
     }
 
+    @Override
+    @Transactional
+    public BookingReviewData submitReview(Long actingUserId, SubmitBookingReviewRequest request) {
+        BookingEntity booking = loadBooking(request.bookingId());
+        if (!actingUserId.equals(booking.getUserId())) {
+            throw new BadRequestException("Authenticated user cannot review this booking.");
+        }
+        if (booking.getBookingStatus() != BookingLifecycleStatus.COMPLETED
+                && booking.getBookingStatus() != BookingLifecycleStatus.CANCELLED) {
+            throw new BadRequestException("Booking can be reviewed only after it is completed or cancelled.");
+        }
+        if (booking.getBookingStatus() == BookingLifecycleStatus.CANCELLED
+                && booking.getPaymentStatus() == PayablePaymentStatus.FAILED) {
+            throw new BadRequestException("Payment-failed bookings cannot be reviewed.");
+        }
+        if (bookingSupportRepository.countReviewsByReviewerAndBookingId(actingUserId, booking.getId()) > 0) {
+            throw new BadRequestException("Review already submitted for this booking.");
+        }
+
+        String comment = request.comment() == null ? "" : request.comment().trim();
+        bookingSupportRepository.insertBookingReview(
+                actingUserId,
+                booking.getProviderEntityType().name(),
+                booking.getProviderEntityId(),
+                booking.getId(),
+                request.rating(),
+                comment
+        );
+        if (booking.getProviderEntityType() == ProviderEntityType.LABOUR) {
+            bookingSupportRepository.refreshLabourRating(booking.getProviderEntityId());
+        } else if (booking.getProviderEntityType() == ProviderEntityType.SERVICE_PROVIDER) {
+            bookingSupportRepository.refreshServiceProviderRating(booking.getProviderEntityId());
+        }
+        return new BookingReviewData(
+                booking.getId(),
+                request.rating(),
+                comment,
+                LocalDateTime.now()
+        );
+    }
+
     private void validateOtpGeneration(BookingEntity booking, BookingOtpPurpose purpose) {
         switch (purpose) {
             case START_WORK -> {
@@ -521,7 +562,10 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
                     ? bookingPolicyService.serviceAutomobileReachTimelineMinutes()
                     : bookingPolicyService.serviceDefaultReachTimelineMinutes();
         }
-        return now.isAfter(booking.getScheduledStartAt().plusMinutes(minutes));
+        LocalDateTime baseTime = booking.getCreatedAt() != null
+                ? booking.getCreatedAt()
+                : booking.getScheduledStartAt();
+        return now.isAfter(baseTime.plusMinutes(minutes));
     }
 
     private void releaseCapacityIfNeeded(BookingEntity booking) {
