@@ -109,7 +109,7 @@ class BookingPaymentServiceImplTest {
         BookingEntity booking = serviceBooking();
         when(bookingRepository.findById(10L)).thenReturn(Optional.of(booking));
         when(paymentRepository.findByPayableTypeAndPayableId(PayableType.BOOKING, 10L)).thenReturn(Optional.empty());
-        when(bookingPolicyService.servicePlatformFee()).thenReturn(BigDecimal.valueOf(49));
+        when(bookingPolicyService.servicePlatformFeeAmount(BigDecimal.valueOf(500))).thenReturn(BigDecimal.valueOf(49));
         when(razorpayGatewayService.createOrder(any(), eq(BigDecimal.valueOf(549)), eq("INR")))
                 .thenReturn(new RazorpayGatewayService.RazorpayOrderData(
                         "rzp_test_key",
