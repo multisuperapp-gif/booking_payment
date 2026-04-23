@@ -29,7 +29,11 @@ public interface BookingPolicyService {
 
     BigDecimal labourBookingChargeAmount(BigDecimal labourQuotedAmount);
 
-    BigDecimal servicePlatformFee();
+    BigDecimal servicePlatformFeePercent();
 
-    BigDecimal shopPlatformFee();
+    BigDecimal servicePlatformFeeAmount(BigDecimal bookingSubtotal);
+
+    BigDecimal shopPlatformFeePercent();
+
+    BigDecimal shopPlatformFeeAmount(BigDecimal orderSubtotal);
 }

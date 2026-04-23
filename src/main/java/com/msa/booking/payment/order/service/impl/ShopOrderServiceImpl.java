@@ -101,7 +101,7 @@ public class ShopOrderServiceImpl implements ShopOrderService {
         }
 
         BigDecimal deliveryFee = resolveDeliveryFee(request.fulfillmentType(), deliveryRule, subtotal);
-        BigDecimal platformFee = bookingPolicyService.shopPlatformFee();
+        BigDecimal platformFee = bookingPolicyService.shopPlatformFeeAmount(subtotal);
         BigDecimal totalAmount = subtotal.add(deliveryFee).add(platformFee);
 
         OrderEntity order = new OrderEntity();

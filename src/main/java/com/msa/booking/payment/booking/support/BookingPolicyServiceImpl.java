@@ -86,13 +86,23 @@ public class BookingPolicyServiceImpl implements BookingPolicyService {
     }
 
     @Override
-    public BigDecimal servicePlatformFee() {
+    public BigDecimal servicePlatformFeePercent() {
         return resolveAmount(BookingPaymentSettingsKeys.PLATFORM_FEE_SERVICE, BigDecimal.ZERO);
     }
 
     @Override
-    public BigDecimal shopPlatformFee() {
+    public BigDecimal servicePlatformFeeAmount(BigDecimal bookingSubtotal) {
+        return percentAmount(bookingSubtotal, servicePlatformFeePercent());
+    }
+
+    @Override
+    public BigDecimal shopPlatformFeePercent() {
         return resolveAmount(BookingPaymentSettingsKeys.PLATFORM_FEE_SHOP, BigDecimal.ZERO);
+    }
+
+    @Override
+    public BigDecimal shopPlatformFeeAmount(BigDecimal orderSubtotal) {
+        return percentAmount(orderSubtotal, shopPlatformFeePercent());
     }
 
     private int resolveInt(String key, int fallback) {
@@ -123,5 +133,14 @@ public class BookingPolicyServiceImpl implements BookingPolicyService {
         } catch (NumberFormatException ignored) {
             return fallback;
         }
+    }
+
+    private BigDecimal percentAmount(BigDecimal subtotal, BigDecimal percent) {
+        if (subtotal == null || subtotal.signum() <= 0 || percent == null || percent.signum() <= 0) {
+            return BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
+        }
+        return subtotal
+                .multiply(percent)
+                .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
     }
 }

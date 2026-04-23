@@ -422,7 +422,7 @@ public class BookingPaymentServiceImpl implements BookingPaymentService {
             bookingRepository.save(booking);
             return bookingCharge;
         }
-        BigDecimal platformFee = bookingPolicyService.servicePlatformFee();
+        BigDecimal platformFee = bookingPolicyService.servicePlatformFeeAmount(subtotal);
         booking.setPlatformFeeAmount(platformFee);
         booking.setTotalEstimatedAmount(subtotal.add(platformFee));
         bookingRepository.save(booking);
