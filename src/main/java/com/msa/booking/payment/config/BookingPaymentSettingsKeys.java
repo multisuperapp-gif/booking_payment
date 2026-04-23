@@ -11,6 +11,7 @@ public final class BookingPaymentSettingsKeys {
     public static final String BOOKING_REACH_WARNING_MINUTES = "booking.reach.warning.minutes";
     public static final String LABOUR_REACH_TIMELINE_MINUTES = "labour.reach.timeline.minutes";
     public static final String SERVICE_REACH_TIMELINE_AUTOMOBILE_MINUTES = "service.reach.timeline.automobile.minutes";
+    public static final String SERVICE_REACH_TIMELINE_AUTOMOBILE_MINUTES_PER_KM = "service.reach.timeline.automobile.minutes.per.km";
     public static final String SERVICE_REACH_TIMELINE_DEFAULT_MINUTES = "service.reach.timeline.default.minutes";
     public static final String LABOUR_MONTHLY_NO_SHOW_SUSPEND_THRESHOLD = "labour.monthly.no.show.suspend.threshold";
     public static final String SERVICE_MONTHLY_NO_SHOW_SUSPEND_THRESHOLD = "service.monthly.no.show.suspend.threshold";

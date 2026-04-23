@@ -31,6 +31,7 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
     private final PenaltyRepository penaltyRepository;
     private final SuspensionRepository suspensionRepository;
     private final RefundRepository refundRepository;
+    private final BookingStatusHistoryRepository bookingStatusHistoryRepository;
     private final BookingPolicyService bookingPolicyService;
     private final BookingHistoryService bookingHistoryService;
     private final NotificationService notificationService;
@@ -45,6 +46,7 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
             PenaltyRepository penaltyRepository,
             SuspensionRepository suspensionRepository,
             RefundRepository refundRepository,
+            BookingStatusHistoryRepository bookingStatusHistoryRepository,
             BookingPolicyService bookingPolicyService,
             BookingHistoryService bookingHistoryService,
             NotificationService notificationService,
@@ -57,6 +59,7 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
         this.penaltyRepository = penaltyRepository;
         this.suspensionRepository = suspensionRepository;
         this.refundRepository = refundRepository;
+        this.bookingStatusHistoryRepository = bookingStatusHistoryRepository;
         this.bookingPolicyService = bookingPolicyService;
         this.bookingHistoryService = bookingHistoryService;
         this.notificationService = notificationService;
@@ -96,6 +99,7 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
         String oldStatus = booking.getBookingStatus().name();
         booking.setBookingStatus(BookingLifecycleStatus.ARRIVED);
         bookingRepository.save(booking);
+        keepStartWorkOtpAvailableAfterArrival(booking);
         bookingHistoryService.recordBookingStatus(booking, oldStatus, booking.getBookingStatus().name(), resolveProviderUserId(booking), "Provider arrived");
         notificationService.notifyUser(
                 booking.getUserId(),
@@ -156,7 +160,9 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
                         BookingActionOtpStatus.GENERATED
                 )
                 .orElseThrow(() -> new BadRequestException("Invalid booking OTP."));
-        if (otp.getExpiresAt().isBefore(LocalDateTime.now())) {
+        boolean ignoreExpiryForArrivedStartOtp = request.purpose() == BookingOtpPurpose.START_WORK
+                && booking.getBookingStatus() == BookingLifecycleStatus.ARRIVED;
+        if (!ignoreExpiryForArrivedStartOtp && otp.getExpiresAt().isBefore(LocalDateTime.now())) {
             otp.setOtpStatus(BookingActionOtpStatus.EXPIRED);
             bookingActionOtpRepository.save(otp);
             throw new BadRequestException("Booking OTP has expired.");
@@ -378,6 +384,33 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
         bookingActionOtpRepository.saveAll(openOtps);
     }
 
+    private void keepStartWorkOtpAvailableAfterArrival(BookingEntity booking) {
+        List<BookingActionOtpEntity> openOtps = bookingActionOtpRepository
+                .findByBookingIdAndOtpPurposeAndOtpStatus(
+                        booking.getId(),
+                        BookingOtpPurpose.START_WORK,
+                        BookingActionOtpStatus.GENERATED
+                );
+        LocalDateTime extendedExpiresAt = LocalDateTime.now().plusDays(1);
+        if (openOtps.isEmpty()) {
+            BookingActionOtpEntity otp = new BookingActionOtpEntity();
+            otp.setBookingId(booking.getId());
+            otp.setOtpPurpose(BookingOtpPurpose.START_WORK);
+            otp.setOtpCode(generateOtpCode());
+            otp.setIssuedToUserId(booking.getUserId());
+            otp.setOtpStatus(BookingActionOtpStatus.GENERATED);
+            otp.setExpiresAt(extendedExpiresAt);
+            bookingActionOtpRepository.save(otp);
+            return;
+        }
+        for (BookingActionOtpEntity otp : openOtps) {
+            if (otp.getExpiresAt() == null || otp.getExpiresAt().isBefore(extendedExpiresAt)) {
+                otp.setExpiresAt(extendedExpiresAt);
+            }
+        }
+        bookingActionOtpRepository.saveAll(openOtps);
+    }
+
     private void applyNoShowConsequences(BookingEntity booking) {
         Long providerUserId = resolveProviderUserId(booking);
         PenaltyEntity penalty = new PenaltyEntity();
@@ -551,21 +584,46 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
     }
 
     private boolean hasReachedTimelineElapsed(BookingEntity booking, LocalDateTime now) {
-        int minutes;
-        if (booking.getBookingType() == BookingFlowType.LABOUR) {
-            minutes = bookingPolicyService.labourReachTimelineMinutes();
-        } else {
-            String categoryName = booking.getBookingRequestId() == null
-                    ? null
-                    : bookingSupportRepository.findServiceCategoryNameByBookingRequestId(booking.getBookingRequestId()).orElse(null);
-            minutes = "automobile".equalsIgnoreCase(categoryName)
-                    ? bookingPolicyService.serviceAutomobileReachTimelineMinutes()
-                    : bookingPolicyService.serviceDefaultReachTimelineMinutes();
+        LocalDateTime reachDeadline = resolveReachDeadline(booking);
+        return reachDeadline != null && !now.isBefore(reachDeadline);
+    }
+
+    private LocalDateTime resolvePaymentCompletedBaseTime(BookingEntity booking) {
+        if (booking == null || booking.getId() == null) {
+            return null;
         }
-        LocalDateTime baseTime = booking.getCreatedAt() != null
+        LocalDateTime fallback = booking.getCreatedAt() != null
                 ? booking.getCreatedAt()
                 : booking.getScheduledStartAt();
-        return now.isAfter(baseTime.plusMinutes(minutes));
+        return bookingStatusHistoryRepository
+                .findByBookingIdOrderByChangedAtAsc(booking.getId())
+                .stream()
+                .filter(entry -> BookingLifecycleStatus.PAYMENT_COMPLETED.name().equalsIgnoreCase(entry.getNewStatus()))
+                .map(BookingStatusHistoryEntity::getChangedAt)
+                .reduce((first, second) -> second)
+                .orElse(fallback);
+    }
+
+    private LocalDateTime resolveReachDeadline(BookingEntity booking) {
+        if (booking == null) {
+            return null;
+        }
+        String categoryName = booking.getBookingType() == BookingFlowType.LABOUR || booking.getBookingRequestId() == null
+                ? null
+                : bookingSupportRepository.findServiceCategoryNameByBookingRequestId(booking.getBookingRequestId()).orElse(null);
+        BigDecimal distanceKm = booking.getBookingType() == BookingFlowType.LABOUR || booking.getBookingRequestId() == null
+                ? null
+                : bookingSupportRepository.findAcceptedDistanceKmByBookingRequestId(
+                        booking.getBookingRequestId(),
+                        booking.getProviderEntityType().name(),
+                        booking.getProviderEntityId()
+                ).orElse(null);
+        return bookingPolicyService.resolveReachDeadline(
+                booking.getBookingType(),
+                categoryName,
+                distanceKm,
+                resolvePaymentCompletedBaseTime(booking)
+        );
     }
 
     private void releaseCapacityIfNeeded(BookingEntity booking) {

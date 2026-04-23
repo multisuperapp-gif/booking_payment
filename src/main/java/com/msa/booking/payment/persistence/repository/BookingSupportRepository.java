@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Optional;
 
@@ -113,6 +114,22 @@ public interface BookingSupportRepository extends Repository<BookingEntity, Long
             WHERE br.id = :bookingRequestId
             """, nativeQuery = true)
     Optional<String> findServiceCategoryNameByBookingRequestId(@Param("bookingRequestId") Long bookingRequestId);
+
+    @Query(value = """
+            SELECT brc.distance_km
+            FROM booking_request_candidates brc
+            WHERE brc.request_id = :bookingRequestId
+              AND brc.candidate_status = 'ACCEPTED'
+              AND brc.provider_entity_type = :providerEntityType
+              AND brc.provider_entity_id = :providerEntityId
+            ORDER BY brc.id DESC
+            LIMIT 1
+            """, nativeQuery = true)
+    Optional<BigDecimal> findAcceptedDistanceKmByBookingRequestId(
+            @Param("bookingRequestId") Long bookingRequestId,
+            @Param("providerEntityType") String providerEntityType,
+            @Param("providerEntityId") Long providerEntityId
+    );
 
     @Modifying
     @Query(value = """

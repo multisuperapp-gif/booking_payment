@@ -21,8 +21,10 @@ import com.msa.booking.payment.persistence.entity.PaymentEntity;
 import com.msa.booking.payment.persistence.entity.PenaltyEntity;
 import com.msa.booking.payment.persistence.entity.RefundEntity;
 import com.msa.booking.payment.persistence.entity.SuspensionEntity;
+import com.msa.booking.payment.persistence.entity.BookingStatusHistoryEntity;
 import com.msa.booking.payment.persistence.repository.BookingRepository;
 import com.msa.booking.payment.persistence.repository.BookingSupportRepository;
+import com.msa.booking.payment.persistence.repository.BookingStatusHistoryRepository;
 import com.msa.booking.payment.persistence.repository.PaymentRepository;
 import com.msa.booking.payment.persistence.repository.PenaltyRepository;
 import com.msa.booking.payment.persistence.repository.RefundRepository;
@@ -51,6 +53,7 @@ public class BookingAutoCancellationService {
     private final BookingRepository bookingRepository;
     private final PaymentRepository paymentRepository;
     private final BookingSupportRepository bookingSupportRepository;
+    private final BookingStatusHistoryRepository bookingStatusHistoryRepository;
     private final PenaltyRepository penaltyRepository;
     private final SuspensionRepository suspensionRepository;
     private final RefundRepository refundRepository;
@@ -65,6 +68,7 @@ public class BookingAutoCancellationService {
             BookingRepository bookingRepository,
             PaymentRepository paymentRepository,
             BookingSupportRepository bookingSupportRepository,
+            BookingStatusHistoryRepository bookingStatusHistoryRepository,
             PenaltyRepository penaltyRepository,
             SuspensionRepository suspensionRepository,
             RefundRepository refundRepository,
@@ -77,6 +81,7 @@ public class BookingAutoCancellationService {
         this.bookingRepository = bookingRepository;
         this.paymentRepository = paymentRepository;
         this.bookingSupportRepository = bookingSupportRepository;
+        this.bookingStatusHistoryRepository = bookingStatusHistoryRepository;
         this.penaltyRepository = penaltyRepository;
         this.suspensionRepository = suspensionRepository;
         this.refundRepository = refundRepository;
@@ -135,16 +140,20 @@ public class BookingAutoCancellationService {
     }
 
     int cancelProviderNoShowBookings() {
-        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(bookingPolicyService.noShowAutoCancelMinutes());
-        List<BookingEntity> staleBookings = bookingRepository
-                .findTop100ByBookingStatusAndPaymentStatusAndCreatedAtBefore(
+        LocalDateTime now = LocalDateTime.now();
+        List<BookingEntity> activePaidBookings = bookingRepository
+                .findTop500ByBookingStatusAndPaymentStatusAndCreatedAtAfterOrderByCreatedAtAsc(
                         BookingLifecycleStatus.PAYMENT_COMPLETED,
                         PayablePaymentStatus.PAID,
-                        cutoff
+                        now.minusDays(2)
                 );
 
         int cancelled = 0;
-        for (BookingEntity booking : staleBookings) {
+        for (BookingEntity booking : activePaidBookings) {
+            LocalDateTime reachDeadline = resolveReachDeadline(booking);
+            if (reachDeadline == null || now.isBefore(reachDeadline)) {
+                continue;
+            }
             try {
                 cancelProviderNoShowBooking(booking);
                 cancelled++;
@@ -161,7 +170,7 @@ public class BookingAutoCancellationService {
                 .findTop500ByBookingStatusAndPaymentStatusAndCreatedAtAfterOrderByCreatedAtAsc(
                         BookingLifecycleStatus.PAYMENT_COMPLETED,
                         PayablePaymentStatus.PAID,
-                        now.minusMinutes(WARNING_SCAN_LOOKBACK_MINUTES)
+                        now.minusDays(2)
                 );
         Set<Long> activeIds = activeConfirmedBookings.stream()
                 .map(BookingEntity::getId)
@@ -170,8 +179,10 @@ public class BookingAutoCancellationService {
 
         int warned = 0;
         for (BookingEntity booking : activeConfirmedBookings) {
-            LocalDateTime baseTime = reachTimelineBase(booking);
-            LocalDateTime reachByAt = baseTime.plusMinutes(resolveReachTimelineMinutes(booking));
+            LocalDateTime reachByAt = resolveReachDeadline(booking);
+            if (reachByAt == null) {
+                continue;
+            }
             LocalDateTime warningAt = reachByAt.minusMinutes(bookingPolicyService.reachWarningMinutes());
             if (now.isBefore(warningAt) || !now.isBefore(reachByAt)) {
                 continue;
@@ -381,22 +392,43 @@ public class BookingAutoCancellationService {
         }
     }
 
-    private int resolveReachTimelineMinutes(BookingEntity booking) {
-        if (booking.getBookingType() == com.msa.booking.payment.domain.enums.BookingFlowType.LABOUR) {
-            return bookingPolicyService.labourReachTimelineMinutes();
+    private LocalDateTime resolveReachDeadline(BookingEntity booking) {
+        if (booking == null) {
+            return null;
         }
-        String categoryName = booking.getBookingRequestId() == null
+        String categoryName = booking.getBookingType() == com.msa.booking.payment.domain.enums.BookingFlowType.LABOUR
+                || booking.getBookingRequestId() == null
                 ? null
                 : bookingSupportRepository.findServiceCategoryNameByBookingRequestId(booking.getBookingRequestId()).orElse(null);
-        return "automobile".equalsIgnoreCase(categoryName)
-                ? bookingPolicyService.serviceAutomobileReachTimelineMinutes()
-                : bookingPolicyService.serviceDefaultReachTimelineMinutes();
+        BigDecimal distanceKm = booking.getBookingType() == com.msa.booking.payment.domain.enums.BookingFlowType.LABOUR
+                || booking.getBookingRequestId() == null
+                ? null
+                : bookingSupportRepository.findAcceptedDistanceKmByBookingRequestId(
+                        booking.getBookingRequestId(),
+                        booking.getProviderEntityType().name(),
+                        booking.getProviderEntityId()
+                ).orElse(null);
+        return bookingPolicyService.resolveReachDeadline(
+                booking.getBookingType(),
+                categoryName,
+                distanceKm,
+                resolvePaymentCompletedBaseTime(booking)
+        );
     }
 
-    private LocalDateTime reachTimelineBase(BookingEntity booking) {
-        return booking.getCreatedAt() != null
+    private LocalDateTime resolvePaymentCompletedBaseTime(BookingEntity booking) {
+        if (booking == null || booking.getId() == null) {
+            return null;
+        }
+        LocalDateTime fallback = booking.getCreatedAt() != null
                 ? booking.getCreatedAt()
                 : booking.getScheduledStartAt();
+        return bookingStatusHistoryRepository.findByBookingIdOrderByChangedAtAsc(booking.getId())
+                .stream()
+                .filter(entry -> BookingLifecycleStatus.PAYMENT_COMPLETED.name().equalsIgnoreCase(entry.getNewStatus()))
+                .map(BookingStatusHistoryEntity::getChangedAt)
+                .reduce((first, second) -> second)
+                .orElse(fallback);
     }
 
     private void notifyUser(BookingEntity booking, String type, String title, String body) {

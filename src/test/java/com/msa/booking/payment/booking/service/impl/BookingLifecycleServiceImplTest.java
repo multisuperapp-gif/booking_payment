@@ -19,6 +19,7 @@ import com.msa.booking.payment.persistence.entity.RefundEntity;
 import com.msa.booking.payment.persistence.repository.BookingActionOtpRepository;
 import com.msa.booking.payment.persistence.repository.BookingRepository;
 import com.msa.booking.payment.persistence.repository.BookingSupportRepository;
+import com.msa.booking.payment.persistence.repository.BookingStatusHistoryRepository;
 import com.msa.booking.payment.persistence.repository.PaymentRepository;
 import com.msa.booking.payment.persistence.repository.PenaltyRepository;
 import com.msa.booking.payment.persistence.repository.RefundRepository;
@@ -34,6 +35,7 @@ import org.mockito.quality.Strictness;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -63,6 +65,8 @@ class BookingLifecycleServiceImplTest {
     @Mock
     private RefundRepository refundRepository;
     @Mock
+    private BookingStatusHistoryRepository bookingStatusHistoryRepository;
+    @Mock
     private BookingPolicyService bookingPolicyService;
     @Mock
     private BookingHistoryService bookingHistoryService;
@@ -83,6 +87,7 @@ class BookingLifecycleServiceImplTest {
                 penaltyRepository,
                 suspensionRepository,
                 refundRepository,
+                bookingStatusHistoryRepository,
                 bookingPolicyService,
                 bookingHistoryService,
                 notificationService,
@@ -92,6 +97,7 @@ class BookingLifecycleServiceImplTest {
         when(bookingRepository.save(any(BookingEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(paymentRepository.save(any(PaymentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(refundRepository.save(any(RefundEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(bookingStatusHistoryRepository.findByBookingIdOrderByChangedAtAsc(anyLong())).thenReturn(List.of());
     }
 
     @Test

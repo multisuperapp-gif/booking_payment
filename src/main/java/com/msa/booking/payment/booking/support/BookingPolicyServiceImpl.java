@@ -1,14 +1,19 @@
 package com.msa.booking.payment.booking.support;
 
 import com.msa.booking.payment.config.BookingPaymentSettingsKeys;
+import com.msa.booking.payment.domain.enums.BookingFlowType;
 import com.msa.booking.payment.persistence.repository.AppSettingRepository;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDateTime;
+import java.util.Set;
 
 @Service
 public class BookingPolicyServiceImpl implements BookingPolicyService {
+    private static final Set<String> SAME_DAY_SERVICE_CATEGORIES = Set.of("plumber", "home appliance", "home appliances");
+
     private final AppSettingRepository appSettingRepository;
 
     public BookingPolicyServiceImpl(AppSettingRepository appSettingRepository) {
@@ -51,8 +56,38 @@ public class BookingPolicyServiceImpl implements BookingPolicyService {
     }
 
     @Override
+    public int serviceAutomobileReachTimelineMinutesPerKm() {
+        return resolveInt(BookingPaymentSettingsKeys.SERVICE_REACH_TIMELINE_AUTOMOBILE_MINUTES_PER_KM, 5);
+    }
+
+    @Override
     public int serviceDefaultReachTimelineMinutes() {
         return resolveInt(BookingPaymentSettingsKeys.SERVICE_REACH_TIMELINE_DEFAULT_MINUTES, 480);
+    }
+
+    @Override
+    public LocalDateTime resolveReachDeadline(BookingFlowType bookingType, String categoryName, BigDecimal distanceKm, LocalDateTime baseTime) {
+        if (baseTime == null) {
+            return null;
+        }
+        if (bookingType == BookingFlowType.LABOUR) {
+            return baseTime.plusMinutes(labourReachTimelineMinutes());
+        }
+        String normalizedCategory = normalizeCategory(categoryName);
+        if ("automobile".equals(normalizedCategory)) {
+            BigDecimal effectiveDistance = distanceKm == null || distanceKm.signum() <= 0
+                    ? BigDecimal.ONE
+                    : distanceKm;
+            int minutes = effectiveDistance
+                    .multiply(BigDecimal.valueOf(serviceAutomobileReachTimelineMinutesPerKm()))
+                    .setScale(0, RoundingMode.CEILING)
+                    .intValue();
+            return baseTime.plusMinutes(Math.max(minutes, serviceAutomobileReachTimelineMinutesPerKm()));
+        }
+        if (SAME_DAY_SERVICE_CATEGORIES.contains(normalizedCategory)) {
+            return baseTime.toLocalDate().atTime(23, 59, 59);
+        }
+        return baseTime.plusMinutes(serviceDefaultReachTimelineMinutes());
     }
 
     @Override
@@ -103,6 +138,10 @@ public class BookingPolicyServiceImpl implements BookingPolicyService {
     @Override
     public BigDecimal shopPlatformFeeAmount(BigDecimal orderSubtotal) {
         return percentAmount(orderSubtotal, shopPlatformFeePercent());
+    }
+
+    private String normalizeCategory(String categoryName) {
+        return categoryName == null ? "" : categoryName.trim().toLowerCase();
     }
 
     private int resolveInt(String key, int fallback) {

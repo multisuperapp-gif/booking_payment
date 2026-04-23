@@ -274,6 +274,13 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
             LocalDateTime createdAt = rs.getTimestamp("created_at").toLocalDateTime();
             BookingFlowType bookingType = BookingFlowType.valueOf(rs.getString("booking_type"));
             String categoryLabel = rs.getString("category_label");
+            BigDecimal distanceKm = rs.getBigDecimal("distance_km");
+            LocalDateTime reachByAt = bookingPolicyService.resolveReachDeadline(
+                    bookingType,
+                    categoryLabel,
+                    distanceKm,
+                    resolvePaymentCompletedBaseTime(rs.getLong("booking_id"), createdAt != null ? createdAt : scheduledStartAt)
+            );
             return new ProviderActiveBookingData(
                     rs.getLong("booking_id"),
                     rs.getString("booking_code"),
@@ -285,10 +292,10 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                     rs.getString("customer_name"),
                     rs.getString("customer_phone"),
                     rs.getBigDecimal("quoted_price_amount"),
-                    rs.getBigDecimal("distance_km"),
+                    distanceKm,
                     scheduledStartAt,
                     createdAt.plusSeconds(bookingPolicyService.acceptedPaymentTimeoutSeconds()),
-                    createdAt.plusMinutes(resolveReachTimelineMinutes(bookingType, categoryLabel)),
+                    reachByAt,
                     categoryLabel,
                     rs.getString("labour_pricing_model"),
                     rs.getString("address_label"),
@@ -588,10 +595,7 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
                 ? null
                 : booking.getCreatedAt().plusSeconds(bookingPolicyService.acceptedPaymentTimeoutSeconds());
         String categoryLabel = resolveCategoryLabel(request);
-        LocalDateTime reachByAt = booking == null || (booking.getCreatedAt() == null && booking.getScheduledStartAt() == null)
-                ? null
-                : (booking.getCreatedAt() != null ? booking.getCreatedAt() : booking.getScheduledStartAt())
-                        .plusMinutes(resolveReachTimelineMinutes(request.getBookingType(), categoryLabel));
+        LocalDateTime reachByAt = resolveReachByAt(booking, request.getBookingType(), categoryLabel, distanceKm);
         boolean revealProviderLiveLocation = booking != null && booking.getPaymentStatus() == PayablePaymentStatus.PAID;
         String historyStatus = resolveHistoryStatus(booking);
         boolean reviewSubmitted = booking != null
@@ -670,13 +674,26 @@ public class BookingRequestQueryServiceImpl implements BookingRequestQueryServic
         return "X".repeat(Math.max(trimmed.length() - 4, 0)) + trimmed.substring(trimmed.length() - 4);
     }
 
-    private int resolveReachTimelineMinutes(BookingFlowType bookingType, String categoryLabel) {
-        if (bookingType == BookingFlowType.LABOUR) {
-            return bookingPolicyService.labourReachTimelineMinutes();
+    private LocalDateTime resolvePaymentCompletedBaseTime(Long bookingId, LocalDateTime fallback) {
+        if (bookingId == null) {
+            return fallback;
         }
-        return "automobile".equalsIgnoreCase(categoryLabel)
-                ? bookingPolicyService.serviceAutomobileReachTimelineMinutes()
-                : bookingPolicyService.serviceDefaultReachTimelineMinutes();
+        return bookingStatusHistoryRepository
+                .findByBookingIdOrderByChangedAtAsc(bookingId)
+                .stream()
+                .filter(entry -> BookingLifecycleStatus.PAYMENT_COMPLETED.name().equalsIgnoreCase(entry.getNewStatus()))
+                .map(BookingStatusHistoryEntity::getChangedAt)
+                .reduce((first, second) -> second)
+                .orElse(fallback);
+    }
+
+    private LocalDateTime resolveReachByAt(BookingEntity booking, BookingFlowType bookingType, String categoryLabel, BigDecimal distanceKm) {
+        if (booking == null) {
+            return null;
+        }
+        LocalDateTime fallbackBaseTime = booking.getCreatedAt() != null ? booking.getCreatedAt() : booking.getScheduledStartAt();
+        LocalDateTime baseTime = resolvePaymentCompletedBaseTime(booking.getId(), fallbackBaseTime);
+        return bookingPolicyService.resolveReachDeadline(bookingType, categoryLabel, distanceKm, baseTime);
     }
 
     private StartOtpData prepareMissingStartOtp(Long bookingId, LocalDateTime reachByAt) {

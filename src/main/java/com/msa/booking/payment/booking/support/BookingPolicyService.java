@@ -1,6 +1,8 @@
 package com.msa.booking.payment.booking.support;
 
+import com.msa.booking.payment.domain.enums.BookingFlowType;
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 public interface BookingPolicyService {
     int labourDirectRequestTimeoutSeconds();
@@ -17,7 +19,11 @@ public interface BookingPolicyService {
 
     int serviceAutomobileReachTimelineMinutes();
 
+    int serviceAutomobileReachTimelineMinutesPerKm();
+
     int serviceDefaultReachTimelineMinutes();
+
+    LocalDateTime resolveReachDeadline(BookingFlowType bookingType, String categoryName, BigDecimal distanceKm, LocalDateTime baseTime);
 
     int labourNoShowSuspendThreshold();
 
