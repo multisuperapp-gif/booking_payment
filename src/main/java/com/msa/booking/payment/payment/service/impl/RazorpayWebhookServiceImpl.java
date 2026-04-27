@@ -7,6 +7,7 @@ import com.msa.booking.payment.common.exception.BadRequestException;
 import com.msa.booking.payment.domain.enums.*;
 import com.msa.booking.payment.notification.service.NotificationService;
 import com.msa.booking.payment.modules.payment.service.PaymentWebhookEventService;
+import com.msa.booking.payment.order.service.ShopOrderFinanceContextService;
 import com.msa.booking.payment.payment.service.RazorpayGatewayService;
 import com.msa.booking.payment.payment.service.RazorpayWebhookService;
 import com.msa.booking.payment.persistence.entity.*;
@@ -25,13 +26,12 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
     private final PaymentRepository paymentRepository;
     private final PaymentTransactionRepository paymentTransactionRepository;
     private final BookingRepository bookingRepository;
-    private final OrderRepository orderRepository;
-    private final OrderItemRepository orderItemRepository;
     private final BookingSupportRepository bookingSupportRepository;
     private final ShopOrderSupportRepository shopOrderSupportRepository;
     private final BookingHistoryService bookingHistoryService;
     private final NotificationService notificationService;
     private final PaymentWebhookEventService paymentWebhookEventService;
+    private final ShopOrderFinanceContextService shopOrderFinanceContextService;
 
     public RazorpayWebhookServiceImpl(
             RazorpayGatewayService razorpayGatewayService,
@@ -40,13 +40,12 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
             PaymentRepository paymentRepository,
             PaymentTransactionRepository paymentTransactionRepository,
             BookingRepository bookingRepository,
-            OrderRepository orderRepository,
-            OrderItemRepository orderItemRepository,
             BookingSupportRepository bookingSupportRepository,
             ShopOrderSupportRepository shopOrderSupportRepository,
             BookingHistoryService bookingHistoryService,
             NotificationService notificationService,
-            PaymentWebhookEventService paymentWebhookEventService
+            PaymentWebhookEventService paymentWebhookEventService,
+            ShopOrderFinanceContextService shopOrderFinanceContextService
     ) {
         this.razorpayGatewayService = razorpayGatewayService;
         this.objectMapper = objectMapper;
@@ -54,13 +53,12 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
         this.paymentRepository = paymentRepository;
         this.paymentTransactionRepository = paymentTransactionRepository;
         this.bookingRepository = bookingRepository;
-        this.orderRepository = orderRepository;
-        this.orderItemRepository = orderItemRepository;
         this.bookingSupportRepository = bookingSupportRepository;
         this.shopOrderSupportRepository = shopOrderSupportRepository;
         this.bookingHistoryService = bookingHistoryService;
         this.notificationService = notificationService;
         this.paymentWebhookEventService = paymentWebhookEventService;
+        this.shopOrderFinanceContextService = shopOrderFinanceContextService;
     }
 
     @Override
@@ -172,29 +170,31 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
             return;
         }
 
-        OrderEntity order = orderRepository.findById(payment.getPayableId())
-                .orElseThrow(() -> new BadRequestException("Order not found for payment webhook."));
-        if (order.getOrderStatus() != OrderLifecycleStatus.PAYMENT_COMPLETED) {
-            consumeReservedInventory(order);
-            String oldStatus = order.getOrderStatus().name();
-            order.setPaymentStatus(PayablePaymentStatus.PAID);
-            order.setOrderStatus(OrderLifecycleStatus.PAYMENT_COMPLETED);
-            orderRepository.save(order);
-            bookingHistoryService.recordOrderStatus(order, oldStatus, order.getOrderStatus().name(), order.getUserId(), "Order payment completed from Razorpay webhook");
+        var order = shopOrderFinanceContextService.loadRequired(payment.getPayableId());
+        if (!OrderLifecycleStatus.PAYMENT_COMPLETED.name().equalsIgnoreCase(order.orderStatus())) {
+            consumeReservedInventory(order.orderId());
+            shopOrderFinanceContextService.updateStateRequired(
+                    order.orderId(),
+                    PayablePaymentStatus.PAID.name(),
+                    OrderLifecycleStatus.PAYMENT_COMPLETED.name(),
+                    order.userId(),
+                    "Order payment completed from Razorpay webhook",
+                    null
+            );
             notificationService.notifyUser(
-                    order.getUserId(),
+                    order.userId(),
                     "SHOP_ORDER_PAYMENT_SUCCESS",
                     "Order payment successful",
                     "Your shop order payment was completed successfully.",
-                    Map.of("orderId", order.getId(), "orderCode", order.getOrderCode(), "razorpayOrderId", gatewayOrderId)
+                    Map.of("orderId", order.orderId(), "orderCode", order.orderCode(), "razorpayOrderId", gatewayOrderId)
             );
-            shopOrderSupportRepository.findShopOwnerUserId(order.getShopId())
+            shopOrderSupportRepository.findShopOwnerUserId(order.shopId())
                     .ifPresent(ownerUserId -> notificationService.notifyUser(
                             ownerUserId,
                             "SHOP_ORDER_RECEIVED",
                             "New paid order received",
                             "A new paid order is ready for acceptance.",
-                            Map.of("orderId", order.getId(), "orderCode", order.getOrderCode())
+                            Map.of("orderId", order.orderId(), "orderCode", order.orderCode())
                     ));
         }
     }
@@ -241,21 +241,23 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
             return;
         }
 
-        OrderEntity order = orderRepository.findById(payment.getPayableId())
-                .orElseThrow(() -> new BadRequestException("Order not found for payment webhook."));
-        if (order.getOrderStatus() != OrderLifecycleStatus.CANCELLED) {
-            String oldStatus = order.getOrderStatus().name();
-            order.setPaymentStatus(PayablePaymentStatus.FAILED);
-            order.setOrderStatus(OrderLifecycleStatus.CANCELLED);
-            orderRepository.save(order);
-            releaseReservedInventory(order);
-            bookingHistoryService.recordOrderStatus(order, oldStatus, order.getOrderStatus().name(), order.getUserId(), "Order payment failed from Razorpay webhook");
+        var order = shopOrderFinanceContextService.loadRequired(payment.getPayableId());
+        if (!OrderLifecycleStatus.CANCELLED.name().equalsIgnoreCase(order.orderStatus())) {
+            shopOrderFinanceContextService.updateStateRequired(
+                    order.orderId(),
+                    PayablePaymentStatus.FAILED.name(),
+                    OrderLifecycleStatus.CANCELLED.name(),
+                    order.userId(),
+                    "Order payment failed from Razorpay webhook",
+                    null
+            );
+            releaseReservedInventory(order.orderId());
             notificationService.notifyUser(
-                    order.getUserId(),
+                    order.userId(),
                     "SHOP_ORDER_PAYMENT_FAILED",
                     "Order payment failed",
                     "Your shop order payment failed and the order was cancelled.",
-                    Map.of("orderId", order.getId(), "orderCode", order.getOrderCode(), "razorpayOrderId", gatewayOrderId)
+                    Map.of("orderId", order.orderId(), "orderCode", order.orderCode(), "razorpayOrderId", gatewayOrderId)
             );
         }
     }
@@ -271,18 +273,18 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
         }
     }
 
-    private void consumeReservedInventory(OrderEntity order) {
-        for (OrderItemEntity item : orderItemRepository.findByOrderId(order.getId())) {
-            int updated = shopOrderSupportRepository.consumeReservedInventory(item.getVariantId(), item.getQuantity());
+    private void consumeReservedInventory(Long orderId) {
+        for (var item : shopOrderFinanceContextService.loadItemsRequired(orderId)) {
+            int updated = shopOrderSupportRepository.consumeReservedInventory(item.variantId(), item.quantity());
             if (updated == 0) {
-                throw new BadRequestException("Reserved inventory could not be committed for variant " + item.getVariantId() + ".");
+                throw new BadRequestException("Reserved inventory could not be committed for variant " + item.variantId() + ".");
             }
         }
     }
 
-    private void releaseReservedInventory(OrderEntity order) {
-        for (OrderItemEntity item : orderItemRepository.findByOrderId(order.getId())) {
-            shopOrderSupportRepository.releaseReservedInventory(item.getVariantId(), item.getQuantity());
+    private void releaseReservedInventory(Long orderId) {
+        for (var item : shopOrderFinanceContextService.loadItemsRequired(orderId)) {
+            shopOrderSupportRepository.releaseReservedInventory(item.variantId(), item.quantity());
         }
     }
 
@@ -299,11 +301,10 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
                     || booking.getPaymentStatus() == PayablePaymentStatus.FAILED
                     || booking.getPaymentStatus() == PayablePaymentStatus.REFUNDED;
         }
-        OrderEntity order = orderRepository.findById(payment.getPayableId())
-                .orElseThrow(() -> new BadRequestException("Order not found for payment webhook."));
-        return order.getOrderStatus() == OrderLifecycleStatus.CANCELLED
-                || order.getPaymentStatus() == PayablePaymentStatus.FAILED
-                || order.getPaymentStatus() == PayablePaymentStatus.REFUNDED;
+        var order = shopOrderFinanceContextService.loadRequired(payment.getPayableId());
+        return OrderLifecycleStatus.CANCELLED.name().equalsIgnoreCase(order.orderStatus())
+                || PayablePaymentStatus.FAILED.name().equalsIgnoreCase(order.paymentStatus())
+                || PayablePaymentStatus.REFUNDED.name().equalsIgnoreCase(order.paymentStatus());
     }
 
     private boolean isLateFailureIgnored(PaymentEntity payment) {
@@ -317,9 +318,8 @@ public class RazorpayWebhookServiceImpl implements RazorpayWebhookService {
             return booking.getPaymentStatus() == PayablePaymentStatus.PAID
                     || booking.getPaymentStatus() == PayablePaymentStatus.REFUNDED;
         }
-        OrderEntity order = orderRepository.findById(payment.getPayableId())
-                .orElseThrow(() -> new BadRequestException("Order not found for payment webhook."));
-        return order.getPaymentStatus() == PayablePaymentStatus.PAID
-                || order.getPaymentStatus() == PayablePaymentStatus.REFUNDED;
+        var order = shopOrderFinanceContextService.loadRequired(payment.getPayableId());
+        return PayablePaymentStatus.PAID.name().equalsIgnoreCase(order.paymentStatus())
+                || PayablePaymentStatus.REFUNDED.name().equalsIgnoreCase(order.paymentStatus());
     }
 }

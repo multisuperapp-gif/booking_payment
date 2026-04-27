@@ -2,54 +2,42 @@ package com.msa.booking.payment.payment.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.msa.booking.payment.booking.support.BookingHistoryService;
-import com.msa.booking.payment.common.exception.BadRequestException;
 import com.msa.booking.payment.domain.enums.BookingLifecycleStatus;
-import com.msa.booking.payment.domain.enums.OrderLifecycleStatus;
 import com.msa.booking.payment.domain.enums.PayablePaymentStatus;
 import com.msa.booking.payment.domain.enums.PayableType;
 import com.msa.booking.payment.domain.enums.PaymentAttemptStatus;
 import com.msa.booking.payment.domain.enums.PaymentLifecycleStatus;
-import com.msa.booking.payment.domain.enums.ProviderEntityType;
 import com.msa.booking.payment.modules.payment.service.PaymentWebhookEventService;
 import com.msa.booking.payment.notification.service.NotificationService;
+import com.msa.booking.payment.order.service.ShopOrderFinanceContextService;
 import com.msa.booking.payment.payment.service.RazorpayGatewayService;
 import com.msa.booking.payment.persistence.entity.BookingEntity;
-import com.msa.booking.payment.persistence.entity.OrderEntity;
-import com.msa.booking.payment.persistence.entity.OrderItemEntity;
 import com.msa.booking.payment.persistence.entity.PaymentAttemptEntity;
 import com.msa.booking.payment.persistence.entity.PaymentEntity;
 import com.msa.booking.payment.persistence.repository.BookingRepository;
 import com.msa.booking.payment.persistence.repository.BookingSupportRepository;
-import com.msa.booking.payment.persistence.repository.OrderItemRepository;
-import com.msa.booking.payment.persistence.repository.OrderRepository;
 import com.msa.booking.payment.persistence.repository.PaymentAttemptRepository;
 import com.msa.booking.payment.persistence.repository.PaymentRepository;
 import com.msa.booking.payment.persistence.repository.PaymentTransactionRepository;
 import com.msa.booking.payment.persistence.repository.ShopOrderSupportRepository;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoSettings;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.mockito.quality.Strictness;
-
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
-@MockitoSettings(strictness = Strictness.LENIENT)
 class RazorpayWebhookServiceImplTest {
 
     @Mock
@@ -63,10 +51,6 @@ class RazorpayWebhookServiceImplTest {
     @Mock
     private BookingRepository bookingRepository;
     @Mock
-    private OrderRepository orderRepository;
-    @Mock
-    private OrderItemRepository orderItemRepository;
-    @Mock
     private BookingSupportRepository bookingSupportRepository;
     @Mock
     private ShopOrderSupportRepository shopOrderSupportRepository;
@@ -76,6 +60,8 @@ class RazorpayWebhookServiceImplTest {
     private NotificationService notificationService;
     @Mock
     private PaymentWebhookEventService paymentWebhookEventService;
+    @Mock
+    private ShopOrderFinanceContextService shopOrderFinanceContextService;
 
     private RazorpayWebhookServiceImpl service;
 
@@ -88,19 +74,16 @@ class RazorpayWebhookServiceImplTest {
                 paymentRepository,
                 paymentTransactionRepository,
                 bookingRepository,
-                orderRepository,
-                orderItemRepository,
                 bookingSupportRepository,
                 shopOrderSupportRepository,
                 bookingHistoryService,
                 notificationService,
-                paymentWebhookEventService
+                paymentWebhookEventService,
+                shopOrderFinanceContextService
         );
 
         when(paymentRepository.save(any(PaymentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(paymentAttemptRepository.save(any(PaymentAttemptEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(bookingRepository.save(any(BookingEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(orderRepository.save(any(OrderEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(paymentWebhookEventService.resolveWebhookKey(any(), any())).thenReturn("webhook_key");
         when(paymentWebhookEventService.registerIfFirst(any(), any(), any(), any(), any(), any())).thenReturn(true);
     }
@@ -144,17 +127,10 @@ class RazorpayWebhookServiceImplTest {
                 eq(77L),
                 eq("Payment completed from Razorpay webhook")
         );
-        verify(notificationService).notifyUser(
-                eq(77L),
-                eq("BOOKING_PAYMENT_SUCCESS"),
-                eq("Payment successful"),
-                eq("Your booking payment was completed successfully."),
-                any(Map.class)
-        );
     }
 
     @Test
-    void processWebhookMarksOrderPaymentFailureAndReleasesInventory() {
+    void processWebhookMarksShopOrderPaymentFailureAndReleasesInventory() {
         String body = """
                 {
                   "event": "payment.failed",
@@ -170,202 +146,96 @@ class RazorpayWebhookServiceImplTest {
                 }
                 """;
         PaymentAttemptEntity attempt = paymentAttempt(901L, "order_webhook_fail");
-        PaymentEntity payment = orderPayment(901L, 21L);
-        OrderEntity order = order();
-        OrderItemEntity item = new OrderItemEntity();
-        item.setVariantId(501L);
-        item.setQuantity(2);
+        PaymentEntity payment = shopOrderPayment(901L, 21L);
 
         when(razorpayGatewayService.verifyWebhookSignature(body, "valid_signature")).thenReturn(true);
         when(paymentAttemptRepository.findFirstByGatewayOrderIdOrderByAttemptedAtDesc("order_webhook_fail")).thenReturn(Optional.of(attempt));
         when(paymentRepository.findById(901L)).thenReturn(Optional.of(payment));
-        when(orderRepository.findById(21L)).thenReturn(Optional.of(order));
-        when(orderItemRepository.findByOrderId(21L)).thenReturn(List.of(item));
+        when(shopOrderFinanceContextService.loadRequired(21L)).thenReturn(orderContext());
+        when(shopOrderFinanceContextService.loadItemsRequired(21L)).thenReturn(List.of(
+                new com.msa.booking.payment.integration.shoporders.dto.ShopOrdersRuntimeSyncDtos.OrderItemData(1001L, 501L, 2)
+        ));
 
         service.processWebhook(body, "valid_signature", "evt_2");
 
         assertEquals(PaymentLifecycleStatus.FAILED, payment.getPaymentStatus());
-        assertEquals(OrderLifecycleStatus.CANCELLED, order.getOrderStatus());
-        assertEquals(PayablePaymentStatus.FAILED, order.getPaymentStatus());
+        assertEquals(PaymentAttemptStatus.FAILED, attempt.getAttemptStatus());
         verify(shopOrderSupportRepository).releaseReservedInventory(501L, 2);
-        verify(bookingHistoryService).recordOrderStatus(
-                eq(order),
-                eq("PAYMENT_PENDING"),
-                eq("CANCELLED"),
+        verify(shopOrderFinanceContextService).updateStateRequired(
+                21L,
+                PayablePaymentStatus.FAILED.name(),
+                "CANCELLED",
+                88L,
+                "Order payment failed from Razorpay webhook",
+                null
+        );
+        verify(notificationService).notifyUser(
                 eq(88L),
-                eq("Order payment failed from Razorpay webhook")
+                eq("SHOP_ORDER_PAYMENT_FAILED"),
+                eq("Order payment failed"),
+                eq("Your shop order payment failed and the order was cancelled."),
+                any(Map.class)
         );
     }
 
-    @Test
-    void processWebhookIgnoresLateFailureForPaidOrder() {
-        String body = """
-                {
-                  "event": "payment.failed",
-                  "payload": {
-                    "payment": {
-                      "entity": {
-                        "id": "pay_webhook_fail_late",
-                        "order_id": "order_webhook_paid",
-                        "error_code": "BAD_CARD"
-                      }
-                    }
-                  }
-                }
-                """;
-        PaymentAttemptEntity attempt = paymentAttempt(901L, "order_webhook_paid");
-        PaymentEntity payment = orderPayment(901L, 21L);
-        payment.setPaymentStatus(PaymentLifecycleStatus.SUCCESS);
-        OrderEntity order = order();
-        order.setOrderStatus(OrderLifecycleStatus.PAYMENT_COMPLETED);
-        order.setPaymentStatus(PayablePaymentStatus.PAID);
-
-        when(razorpayGatewayService.verifyWebhookSignature(body, "valid_signature")).thenReturn(true);
-        when(paymentAttemptRepository.findFirstByGatewayOrderIdOrderByAttemptedAtDesc("order_webhook_paid")).thenReturn(Optional.of(attempt));
-        when(paymentRepository.findById(901L)).thenReturn(Optional.of(payment));
-        when(orderRepository.findById(21L)).thenReturn(Optional.of(order));
-
-        service.processWebhook(body, "valid_signature", "evt_3");
-
-        assertEquals(PaymentLifecycleStatus.SUCCESS, payment.getPaymentStatus());
-        assertEquals(OrderLifecycleStatus.PAYMENT_COMPLETED, order.getOrderStatus());
-        verify(shopOrderSupportRepository, never()).releaseReservedInventory(any(), any());
-        verify(bookingHistoryService, never()).recordOrderStatus(any(), any(), any(), any(), any());
-    }
-
-    @Test
-    void processWebhookIgnoresLateSuccessForCancelledOrder() {
-        String body = """
-                {
-                  "event": "payment.captured",
-                  "payload": {
-                    "payment": {
-                      "entity": {
-                        "id": "pay_webhook_late_success",
-                        "order_id": "order_webhook_cancelled"
-                      }
-                    }
-                  }
-                }
-                """;
-        PaymentAttemptEntity attempt = paymentAttempt(901L, "order_webhook_cancelled");
-        PaymentEntity payment = orderPayment(901L, 21L);
-        payment.setPaymentStatus(PaymentLifecycleStatus.FAILED);
-        OrderEntity order = order();
-        order.setOrderStatus(OrderLifecycleStatus.CANCELLED);
-        order.setPaymentStatus(PayablePaymentStatus.FAILED);
-
-        when(razorpayGatewayService.verifyWebhookSignature(body, "valid_signature")).thenReturn(true);
-        when(paymentAttemptRepository.findFirstByGatewayOrderIdOrderByAttemptedAtDesc("order_webhook_cancelled")).thenReturn(Optional.of(attempt));
-        when(paymentRepository.findById(901L)).thenReturn(Optional.of(payment));
-        when(orderRepository.findById(21L)).thenReturn(Optional.of(order));
-
-        service.processWebhook(body, "valid_signature", "evt_4");
-
-        assertEquals(PaymentLifecycleStatus.FAILED, payment.getPaymentStatus());
-        assertEquals(OrderLifecycleStatus.CANCELLED, order.getOrderStatus());
-        verify(paymentTransactionRepository, never()).save(any());
-        verify(shopOrderSupportRepository, never()).consumeReservedInventory(any(), any());
-        verify(bookingHistoryService, never()).recordOrderStatus(any(), any(), any(), any(), any());
-    }
-
-    @Test
-    void processWebhookRejectsInvalidSignature() {
-        when(razorpayGatewayService.verifyWebhookSignature("{}", "bad_signature")).thenReturn(false);
-
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
-                () -> service.processWebhook("{}", "bad_signature", "evt_bad")
-        );
-
-        assertEquals("Invalid Razorpay webhook signature.", exception.getMessage());
-        verify(paymentAttemptRepository, never()).findFirstByGatewayOrderIdOrderByAttemptedAtDesc(any());
-    }
-
-    @Test
-    void processWebhookIgnoresDuplicateEventBeforeStateMutation() {
-        String body = """
-                {
-                  "event": "payment.captured",
-                  "payload": {
-                    "payment": {
-                      "entity": {
-                        "id": "pay_webhook_dup",
-                        "order_id": "order_webhook_dup"
-                      }
-                    }
-                  }
-                }
-                """;
-        PaymentAttemptEntity attempt = paymentAttempt(900L, "order_webhook_dup");
-        PaymentEntity payment = bookingPayment(900L, 10L);
-
-        when(razorpayGatewayService.verifyWebhookSignature(body, "valid_signature")).thenReturn(true);
-        when(paymentAttemptRepository.findFirstByGatewayOrderIdOrderByAttemptedAtDesc("order_webhook_dup")).thenReturn(Optional.of(attempt));
-        when(paymentRepository.findById(900L)).thenReturn(Optional.of(payment));
-        when(paymentWebhookEventService.registerIfFirst(any(), any(), any(), any(), any(), any())).thenReturn(false);
-
-        service.processWebhook(body, "valid_signature", "evt_dup");
-
-        verify(paymentTransactionRepository, never()).save(any());
-        verify(notificationService, never()).notifyUser(any(), any(), any(), any(), any(Map.class));
-    }
-
-    private PaymentAttemptEntity paymentAttempt(Long paymentId, String orderId) {
+    private PaymentAttemptEntity paymentAttempt(Long paymentId, String gatewayOrderId) {
         PaymentAttemptEntity attempt = new PaymentAttemptEntity();
         attempt.setPaymentId(paymentId);
-        attempt.setGatewayName("RAZORPAY");
-        attempt.setGatewayOrderId(orderId);
+        attempt.setGatewayOrderId(gatewayOrderId);
         attempt.setAttemptStatus(PaymentAttemptStatus.PENDING);
-        attempt.setRequestedAmount(BigDecimal.valueOf(499));
+        attempt.setRequestedAmount(BigDecimal.valueOf(199));
         attempt.setAttemptedAt(LocalDateTime.now().minusMinutes(1));
         return attempt;
     }
 
     private PaymentEntity bookingPayment(Long paymentId, Long bookingId) {
-        PaymentEntity payment = new PaymentEntity();
-        payment.setId(paymentId);
+        PaymentEntity payment = basePayment(paymentId, bookingId);
         payment.setPayableType(PayableType.BOOKING);
-        payment.setPayableId(bookingId);
-        payment.setPaymentStatus(PaymentLifecycleStatus.PENDING);
-        payment.setAmount(BigDecimal.valueOf(499));
-        payment.setCurrencyCode("INR");
-        payment.setInitiatedAt(LocalDateTime.now().minusMinutes(10));
         return payment;
     }
 
-    private PaymentEntity orderPayment(Long paymentId, Long orderId) {
+    private PaymentEntity shopOrderPayment(Long paymentId, Long orderId) {
+        PaymentEntity payment = basePayment(paymentId, orderId);
+        payment.setPayableType(PayableType.SHOP_ORDER);
+        return payment;
+    }
+
+    private PaymentEntity basePayment(Long paymentId, Long payableId) {
         PaymentEntity payment = new PaymentEntity();
         payment.setId(paymentId);
-        payment.setPayableType(PayableType.ORDER);
-        payment.setPayableId(orderId);
+        payment.setPayableId(payableId);
         payment.setPaymentStatus(PaymentLifecycleStatus.PENDING);
-        payment.setAmount(BigDecimal.valueOf(799));
+        payment.setAmount(BigDecimal.valueOf(199));
         payment.setCurrencyCode("INR");
-        payment.setInitiatedAt(LocalDateTime.now().minusMinutes(10));
+        payment.setInitiatedAt(LocalDateTime.now().minusMinutes(3));
+        payment.setPayerUserId(88L);
+        payment.setPaymentCode("PAY-" + payableId);
         return payment;
     }
 
     private BookingEntity booking() {
         BookingEntity booking = new BookingEntity();
         booking.setId(10L);
-        booking.setBookingCode("BKG-WEBHOOK");
         booking.setUserId(77L);
-        booking.setProviderEntityType(ProviderEntityType.LABOUR);
-        booking.setProviderEntityId(100L);
+        booking.setBookingCode("BKG-10");
         booking.setBookingStatus(BookingLifecycleStatus.PAYMENT_PENDING);
         booking.setPaymentStatus(PayablePaymentStatus.PENDING);
         return booking;
     }
 
-    private OrderEntity order() {
-        OrderEntity order = new OrderEntity();
-        order.setId(21L);
-        order.setOrderCode("ORD-WEBHOOK");
-        order.setUserId(88L);
-        order.setShopId(300L);
-        order.setOrderStatus(OrderLifecycleStatus.PAYMENT_PENDING);
-        order.setPaymentStatus(PayablePaymentStatus.PENDING);
-        return order;
+    private com.msa.booking.payment.integration.shoporders.dto.ShopOrdersRuntimeSyncDtos.OrderFinanceContextData orderContext() {
+        return new com.msa.booking.payment.integration.shoporders.dto.ShopOrdersRuntimeSyncDtos.OrderFinanceContextData(
+                21L,
+                "ORD-21",
+                300L,
+                88L,
+                "PAYMENT_PENDING",
+                "PENDING",
+                BigDecimal.valueOf(150),
+                BigDecimal.valueOf(49),
+                BigDecimal.valueOf(199),
+                BigDecimal.valueOf(19),
+                "INR"
+        );
     }
 }

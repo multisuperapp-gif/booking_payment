@@ -1,6 +1,10 @@
 spring:
   application:
     name: booking_payment
+  data:
+    redis:
+      repositories:
+        enabled: false
   datasource:
     url: ${DB_URL:jdbc:mysql://multisuperapp1.cituis86a8r2.us-east-1.rds.amazonaws.com:3306/hyperlocal_platform}
     username: ${DB_USERNAME:admin}
@@ -9,7 +13,7 @@ spring:
   jpa:
     open-in-view: false
     hibernate:
-      ddl-auto: update
+      ddl-auto: none
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
@@ -25,6 +29,20 @@ server:
   port: ${SERVER_PORT:8084}
 
 app:
+  storage:
+    provider: ${APP_STORAGE_PROVIDER:LOCAL}
+    aws-region: ${AWS_REGION:us-east-1}
+    billing-docs:
+      bucket: ${S3_BILLING_DOCS_BUCKET:msa-billing-docs-dev}
+    temp-upload:
+      bucket: ${S3_TEMP_UPLOAD_BUCKET:msa-upload-temp-dev}
+    prefixes:
+      labour-invoices: ${S3_PREFIX_LABOUR_INVOICES:invoices/labour}
+      service-invoices: ${S3_PREFIX_SERVICE_INVOICES:invoices/service}
+      shop-invoices: ${S3_PREFIX_SHOP_INVOICES:invoices/shop}
+      refund-credit-notes: ${S3_PREFIX_REFUND_CREDIT_NOTES:refunds/credit-notes}
+      settlements: ${S3_PREFIX_SETTLEMENTS:settlements}
+      multipart: ${S3_PREFIX_MULTIPART:multipart}
   security:
     access-token-secret: ${ACCESS_TOKEN_SECRET:auth-verification-service-super-secret-key}
     access-token-validity-seconds: ${ACCESS_TOKEN_VALIDITY_SECONDS:86400}
@@ -45,6 +63,8 @@ app:
     key-id: ${RAZORPAY_KEY_ID}
     key-secret: ${RAZORPAY_KEY_SECRET}
     webhook-secret: ${RAZORPAY_WEBHOOK_SECRET}
+  integration:
+    shop-orders-base-url: ${SHOP_ORDERS_BASE_URL:http://127.0.0.1:8087}
 
 management:
   endpoints:

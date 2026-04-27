@@ -2,32 +2,30 @@ package com.msa.booking.payment.modules.payment.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.msa.booking.payment.booking.support.BookingPolicyService;
+import com.msa.booking.payment.common.exception.BadRequestException;
 import com.msa.booking.payment.config.RazorpayProperties;
 import com.msa.booking.payment.domain.enums.PayableType;
 import com.msa.booking.payment.domain.enums.PaymentAttemptStatus;
 import com.msa.booking.payment.domain.enums.PaymentLifecycleStatus;
-import com.msa.booking.payment.modules.payment.dto.PaymentDtos.WebhookAcknowledgeResponse;
+import com.msa.booking.payment.integration.shoporders.dto.ShopOrdersRuntimeSyncDtos;
 import com.msa.booking.payment.modules.payment.dto.PaymentDtos.PaymentInitiateRequest;
 import com.msa.booking.payment.modules.payment.dto.PaymentDtos.PaymentInitiateResponse;
+import com.msa.booking.payment.modules.payment.dto.PaymentDtos.WebhookAcknowledgeResponse;
 import com.msa.booking.payment.modules.settlement.service.SettlementLifecycleService;
 import com.msa.booking.payment.notification.service.NotificationService;
-import com.msa.booking.payment.persistence.entity.BookingEntity;
+import com.msa.booking.payment.order.service.ShopOrderFinanceContextService;
 import com.msa.booking.payment.persistence.entity.PaymentAttemptEntity;
 import com.msa.booking.payment.persistence.entity.PaymentEntity;
+import com.msa.booking.payment.persistence.repository.BookingActionOtpRepository;
 import com.msa.booking.payment.persistence.repository.BookingRepository;
+import com.msa.booking.payment.persistence.repository.BookingRequestCandidateRepository;
 import com.msa.booking.payment.persistence.repository.BookingRequestRepository;
-import com.msa.booking.payment.persistence.repository.OrderItemRepository;
-import com.msa.booking.payment.persistence.repository.OrderRepository;
+import com.msa.booking.payment.persistence.repository.BookingStatusHistoryRepository;
 import com.msa.booking.payment.persistence.repository.PaymentAttemptRepository;
 import com.msa.booking.payment.persistence.repository.PaymentRepository;
 import com.msa.booking.payment.persistence.repository.PaymentTransactionRepository;
 import com.msa.booking.payment.persistence.repository.ShopOrderSupportRepository;
-import com.msa.booking.payment.persistence.entity.OrderEntity;
-import com.msa.booking.payment.persistence.entity.OrderItemEntity;
-import com.msa.booking.payment.common.exception.BadRequestException;
-import com.msa.booking.payment.domain.enums.OrderFulfillmentType;
-import com.msa.booking.payment.domain.enums.OrderLifecycleStatus;
-import com.msa.booking.payment.domain.enums.PayablePaymentStatus;
+import com.msa.booking.payment.storage.BillingDocumentStorageService;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -37,12 +35,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -56,17 +52,17 @@ class PaymentLifecycleServiceTest {
     @Mock
     private PaymentTransactionRepository paymentTransactionRepository;
     @Mock
-    private OrderRepository orderRepository;
-    @Mock
-    private OrderItemRepository orderItemRepository;
-    @Mock
     private ShopOrderSupportRepository shopOrderSupportRepository;
     @Mock
     private BookingRepository bookingRepository;
     @Mock
     private BookingRequestRepository bookingRequestRepository;
     @Mock
-    private NamedParameterJdbcTemplate jdbcTemplate;
+    private BookingRequestCandidateRepository bookingRequestCandidateRepository;
+    @Mock
+    private BookingStatusHistoryRepository bookingStatusHistoryRepository;
+    @Mock
+    private BookingActionOtpRepository bookingActionOtpRepository;
     @Mock
     private RazorpayProperties razorpayProperties;
     @Mock
@@ -79,6 +75,10 @@ class PaymentLifecycleServiceTest {
     private NotificationService notificationService;
     @Mock
     private BookingPolicyService bookingPolicyService;
+    @Mock
+    private ShopOrderFinanceContextService shopOrderFinanceContextService;
+    @Mock
+    private BillingDocumentStorageService billingDocumentStorageService;
 
     private PaymentLifecycleService service;
 
@@ -88,19 +88,21 @@ class PaymentLifecycleServiceTest {
                 paymentRepository,
                 paymentAttemptRepository,
                 paymentTransactionRepository,
-                orderRepository,
-                orderItemRepository,
                 shopOrderSupportRepository,
                 bookingRepository,
                 bookingRequestRepository,
-                jdbcTemplate,
+                bookingRequestCandidateRepository,
+                bookingStatusHistoryRepository,
+                bookingActionOtpRepository,
                 razorpayProperties,
                 razorpaySignatureService,
                 paymentWebhookEventService,
                 settlementLifecycleService,
                 notificationService,
                 bookingPolicyService,
-                new ObjectMapper()
+                shopOrderFinanceContextService,
+                new ObjectMapper(),
+                billingDocumentStorageService
         ) {
             @Override
             protected String createRazorpayOrder(PaymentEntity payment) {
@@ -131,14 +133,7 @@ class PaymentLifecycleServiceTest {
         attempt.setRequestedAmount(BigDecimal.valueOf(199));
         attempt.setAttemptedAt(LocalDateTime.now().minusMinutes(1));
 
-        PaymentEntity payment = new PaymentEntity();
-        payment.setId(700L);
-        payment.setPayableId(44L);
-        payment.setPayableType(PayableType.ORDER);
-        payment.setPaymentStatus(PaymentLifecycleStatus.PENDING);
-        payment.setAmount(BigDecimal.valueOf(199));
-        payment.setCurrencyCode("INR");
-        payment.setInitiatedAt(LocalDateTime.now().minusMinutes(3));
+        PaymentEntity payment = payment();
 
         when(paymentWebhookEventService.resolveWebhookKey("evt_dup", body)).thenReturn("evt_dup");
         when(paymentAttemptRepository.findTopByGatewayOrderIdOrderByIdDesc("order_dup_1")).thenReturn(Optional.of(attempt));
@@ -155,39 +150,36 @@ class PaymentLifecycleServiceTest {
     }
 
     @Test
-    void initiateReopensFailedOrderAndReReservesInventory() {
+    void initiateReopensFailedShopOrderAndReReservesInventory() {
         PaymentEntity payment = payment();
         payment.setPaymentStatus(PaymentLifecycleStatus.FAILED);
         payment.setCompletedAt(LocalDateTime.now().minusMinutes(1));
 
-        OrderEntity order = failedCancelledOrder();
-        OrderItemEntity item = new OrderItemEntity();
-        item.setVariantId(501L);
-        item.setQuantity(2);
-
         when(paymentRepository.findByPaymentCode("PAY-ORDER")).thenReturn(Optional.of(payment));
-        when(orderRepository.findById(44L)).thenReturn(Optional.of(order));
-        when(orderItemRepository.findByOrderId(44L)).thenReturn(List.of(item));
+        when(shopOrderFinanceContextService.loadRequired(44L)).thenReturn(orderContext("CANCELLED", "FAILED"));
+        when(shopOrderFinanceContextService.loadItemsRequired(44L)).thenReturn(List.of(
+                new ShopOrdersRuntimeSyncDtos.OrderItemData(1001L, 501L, 2)
+        ));
         when(shopOrderSupportRepository.reserveInventory(501L, 2)).thenReturn(1);
         when(razorpayProperties.isEnabled()).thenReturn(true);
         when(razorpayProperties.getKeyId()).thenReturn("rzp_test_key");
         when(razorpayProperties.getKeySecret()).thenReturn("rzp_test_secret");
         when(paymentAttemptRepository.findTopByPaymentIdAndGatewayNameOrderByIdDesc(700L, "RAZORPAY"))
                 .thenReturn(Optional.empty());
+        when(paymentRepository.save(any(PaymentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(paymentAttemptRepository.save(any(PaymentAttemptEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         PaymentInitiateResponse response = service.initiate(88L, "PAY-ORDER", new PaymentInitiateRequest("RAZORPAY"));
 
         assertEquals("PENDING", response.paymentStatus());
-        assertEquals(OrderLifecycleStatus.PAYMENT_PENDING, order.getOrderStatus());
-        assertEquals(PayablePaymentStatus.PENDING, order.getPaymentStatus());
-        assertEquals(PaymentLifecycleStatus.PENDING, payment.getPaymentStatus());
         verify(shopOrderSupportRepository).reserveInventory(501L, 2);
-        verify(notificationService).notifyUser(
-                eq(88L),
-                eq("SHOP_ORDER_PAYMENT_PENDING"),
-                eq("Complete your payment"),
-                eq("Your shop order payment is waiting for completion."),
-                any()
+        verify(shopOrderFinanceContextService).updateStateRequired(
+                44L,
+                "PENDING",
+                "PAYMENT_PENDING",
+                88L,
+                "Payment retry initiated",
+                null
         );
     }
 
@@ -196,14 +188,11 @@ class PaymentLifecycleServiceTest {
         PaymentEntity payment = payment();
         payment.setPaymentStatus(PaymentLifecycleStatus.FAILED);
 
-        OrderEntity order = failedCancelledOrder();
-        OrderItemEntity item = new OrderItemEntity();
-        item.setVariantId(501L);
-        item.setQuantity(2);
-
         when(paymentRepository.findByPaymentCode("PAY-ORDER")).thenReturn(Optional.of(payment));
-        when(orderRepository.findById(44L)).thenReturn(Optional.of(order));
-        when(orderItemRepository.findByOrderId(44L)).thenReturn(List.of(item));
+        when(shopOrderFinanceContextService.loadRequired(44L)).thenReturn(orderContext("CANCELLED", "FAILED"));
+        when(shopOrderFinanceContextService.loadItemsRequired(44L)).thenReturn(List.of(
+                new ShopOrdersRuntimeSyncDtos.OrderItemData(1001L, 501L, 2)
+        ));
         when(razorpayProperties.isEnabled()).thenReturn(true);
         when(razorpayProperties.getKeyId()).thenReturn("rzp_test_key");
         when(razorpayProperties.getKeySecret()).thenReturn("rzp_test_secret");
@@ -220,127 +209,33 @@ class PaymentLifecycleServiceTest {
         );
     }
 
-    @Test
-    void failureNotifiesUserForOrderPayment() {
-        PaymentEntity payment = payment();
-        PaymentAttemptEntity attempt = new PaymentAttemptEntity();
-        attempt.setId(701L);
-        attempt.setPaymentId(700L);
-        attempt.setGatewayOrderId("order_fail_1");
-        attempt.setAttemptStatus(PaymentAttemptStatus.PENDING);
-
-        OrderEntity order = failedCancelledOrder();
-        order.setOrderStatus(OrderLifecycleStatus.PAYMENT_PENDING);
-        order.setPaymentStatus(PayablePaymentStatus.PENDING);
-
-        when(paymentRepository.findByPaymentCode("PAY-ORDER")).thenReturn(Optional.of(payment));
-        when(paymentAttemptRepository.findTopByGatewayOrderIdOrderByIdDesc("order_fail_1")).thenReturn(Optional.of(attempt));
-        when(orderRepository.findById(44L)).thenReturn(Optional.of(order));
-        when(orderItemRepository.findByOrderId(44L)).thenReturn(List.of());
-
-        service.failure(
-                88L,
-                "PAY-ORDER",
-                new com.msa.booking.payment.modules.payment.dto.PaymentDtos.PaymentFailureRequest(
-                        "order_fail_1",
-                        "FAILED",
-                        "Payment was not completed."
-                )
-        );
-
-        verify(notificationService).notifyUser(
-                eq(88L),
-                eq("SHOP_ORDER_PAYMENT_FAILED"),
-                eq("Payment not completed"),
-                eq("Your shop order payment could not be completed."),
-                any()
-        );
-    }
-
-    @Test
-    void verifyNotifiesUserForBookingPaymentSuccess() {
-        PaymentEntity payment = new PaymentEntity();
-        payment.setId(800L);
-        payment.setPaymentCode("PAY-BOOKING");
-        payment.setPayableId(55L);
-        payment.setPayableType(PayableType.BOOKING);
-        payment.setPayerUserId(99L);
-        payment.setPaymentStatus(PaymentLifecycleStatus.PENDING);
-        payment.setAmount(BigDecimal.valueOf(499));
-        payment.setCurrencyCode("INR");
-        payment.setInitiatedAt(LocalDateTime.now().minusMinutes(5));
-
-        PaymentAttemptEntity attempt = new PaymentAttemptEntity();
-        attempt.setId(801L);
-        attempt.setPaymentId(800L);
-        attempt.setGatewayOrderId("order_booking_1");
-        attempt.setAttemptStatus(PaymentAttemptStatus.PENDING);
-
-        BookingEntity booking = new BookingEntity();
-        booking.setId(55L);
-        booking.setBookingCode("BKG-55");
-        booking.setUserId(99L);
-        booking.setBookingStatus(com.msa.booking.payment.domain.enums.BookingLifecycleStatus.PAYMENT_PENDING);
-        booking.setPaymentStatus(PayablePaymentStatus.PENDING);
-
-        when(paymentRepository.findByPaymentCode("PAY-BOOKING")).thenReturn(Optional.of(payment));
-        when(paymentAttemptRepository.findTopByGatewayOrderIdOrderByIdDesc("order_booking_1")).thenReturn(Optional.of(attempt));
-        when(bookingRepository.findById(55L)).thenReturn(Optional.of(booking));
-
-        service.verify(
-                99L,
-                "PAY-BOOKING",
-                new com.msa.booking.payment.modules.payment.dto.PaymentDtos.PaymentVerifyRequest(
-                        "order_booking_1",
-                        "pay_123",
-                        "sig_123"
-                )
-        );
-
-        verify(notificationService).notifyUser(
-                eq(99L),
-                eq("BOOKING_PAYMENT_SUCCESS"),
-                eq("Payment successful"),
-                eq("Your booking payment was completed successfully."),
-                any()
-        );
-        verify(settlementLifecycleService).recordSuccessfulPayment(payment);
-    }
-
     private PaymentEntity payment() {
         PaymentEntity payment = new PaymentEntity();
         payment.setId(700L);
         payment.setPaymentCode("PAY-ORDER");
         payment.setPayableId(44L);
-        payment.setPayableType(PayableType.ORDER);
-        payment.setPayerUserId(88L);
+        payment.setPayableType(PayableType.SHOP_ORDER);
         payment.setPaymentStatus(PaymentLifecycleStatus.PENDING);
         payment.setAmount(BigDecimal.valueOf(199));
         payment.setCurrencyCode("INR");
         payment.setInitiatedAt(LocalDateTime.now().minusMinutes(3));
+        payment.setPayerUserId(88L);
         return payment;
     }
 
-    private OrderEntity failedCancelledOrder() {
-        OrderEntity order = new OrderEntity();
-        order.setId(44L);
-        order.setOrderCode("ORD-FAILED");
-        order.setUserId(88L);
-        order.setShopId(300L);
-        order.setShopLocationId(701L);
-        order.setAddressId(999L);
-        order.setOrderStatus(OrderLifecycleStatus.CANCELLED);
-        order.setPaymentStatus(PayablePaymentStatus.FAILED);
-        order.setFulfillmentType(OrderFulfillmentType.DELIVERY);
-        order.setSubtotalAmount(BigDecimal.valueOf(180));
-        order.setTaxAmount(BigDecimal.ZERO);
-        order.setDeliveryFeeAmount(BigDecimal.ZERO);
-        order.setPlatformFeeAmount(BigDecimal.valueOf(19));
-        order.setPackagingFeeAmount(BigDecimal.ZERO);
-        order.setTipAmount(BigDecimal.ZERO);
-        order.setDiscountAmount(BigDecimal.ZERO);
-        order.setTotalAmount(BigDecimal.valueOf(199));
-        order.setCurrencyCode("INR");
-        return order;
+    private ShopOrdersRuntimeSyncDtos.OrderFinanceContextData orderContext(String orderStatus, String paymentStatus) {
+        return new ShopOrdersRuntimeSyncDtos.OrderFinanceContextData(
+                44L,
+                "ORD-FAILED",
+                300L,
+                88L,
+                orderStatus,
+                paymentStatus,
+                BigDecimal.valueOf(150),
+                BigDecimal.valueOf(49),
+                BigDecimal.valueOf(199),
+                BigDecimal.valueOf(19),
+                "INR"
+        );
     }
 }

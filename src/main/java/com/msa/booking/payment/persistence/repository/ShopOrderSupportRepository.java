@@ -2,7 +2,7 @@ package com.msa.booking.payment.persistence.repository;
 
 import com.msa.booking.payment.order.projection.ShopCheckoutItemProjection;
 import com.msa.booking.payment.order.projection.ShopDeliveryRuleProjection;
-import com.msa.booking.payment.persistence.entity.OrderEntity;
+import com.msa.booking.payment.persistence.entity.PaymentEntity;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
@@ -12,7 +12,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
-public interface ShopOrderSupportRepository extends Repository<OrderEntity, Long> {
+public interface ShopOrderSupportRepository extends Repository<PaymentEntity, Long> {
     @Query(value = """
             SELECT
                 pv.id AS variantId,

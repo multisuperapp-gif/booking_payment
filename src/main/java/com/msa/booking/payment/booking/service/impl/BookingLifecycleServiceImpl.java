@@ -10,6 +10,7 @@ import com.msa.booking.payment.persistence.repository.*;
 import com.msa.booking.payment.booking.support.BookingHistoryService;
 import com.msa.booking.payment.modules.settlement.service.SettlementLifecycleService;
 import com.msa.booking.payment.notification.service.NotificationService;
+import com.msa.booking.payment.storage.BillingDocumentStorageService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,6 +35,7 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
     private final BookingHistoryService bookingHistoryService;
     private final NotificationService notificationService;
     private final SettlementLifecycleService settlementLifecycleService;
+    private final BillingDocumentStorageService billingDocumentStorageService;
     private final Random random = new Random();
 
     public BookingLifecycleServiceImpl(
@@ -48,7 +50,8 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
             BookingPolicyService bookingPolicyService,
             BookingHistoryService bookingHistoryService,
             NotificationService notificationService,
-            SettlementLifecycleService settlementLifecycleService
+            SettlementLifecycleService settlementLifecycleService,
+            BillingDocumentStorageService billingDocumentStorageService
     ) {
         this.bookingRepository = bookingRepository;
         this.paymentRepository = paymentRepository;
@@ -62,6 +65,7 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
         this.bookingHistoryService = bookingHistoryService;
         this.notificationService = notificationService;
         this.settlementLifecycleService = settlementLifecycleService;
+        this.billingDocumentStorageService = billingDocumentStorageService;
     }
 
     @Override
@@ -536,7 +540,7 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
         payment.setPaymentStatus(PaymentLifecycleStatus.REFUNDED);
         payment.setCompletedAt(LocalDateTime.now());
         paymentRepository.save(payment);
-        upsertRefund(
+        RefundEntity refund = upsertRefund(
                 payment,
                 "RFN-" + payment.getPaymentCode(),
                 RefundLifecycleStatus.SUCCESS,
@@ -545,10 +549,11 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
                 reason
         );
         settlementLifecycleService.recordSuccessfulRefund(payment, payment.getAmount());
+        billingDocumentStorageService.storeRefundCreditNote(payment, refund, booking.getBookingCode(), "Booking refund credit note.");
         notifyBookingRefundSuccess(booking, payment);
     }
 
-    private void upsertRefund(
+    private RefundEntity upsertRefund(
             PaymentEntity payment,
             String refundCode,
             RefundLifecycleStatus refundStatus,
@@ -576,8 +581,7 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
             if (refund.getCompletedAt() == null) {
                 refund.setCompletedAt(LocalDateTime.now());
             }
-            refundRepository.save(refund);
-            return;
+            return refundRepository.save(refund);
         }
 
         RefundEntity refund = new RefundEntity();
@@ -589,7 +593,7 @@ public class BookingLifecycleServiceImpl implements BookingLifecycleService {
         refund.setReason(reason);
         refund.setInitiatedAt(LocalDateTime.now());
         refund.setCompletedAt(LocalDateTime.now());
-        refundRepository.save(refund);
+        return refundRepository.save(refund);
     }
 
     private boolean hasReachedTimelineElapsed(BookingEntity booking, LocalDateTime now) {

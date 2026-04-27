@@ -24,6 +24,7 @@ import com.msa.booking.payment.persistence.repository.PaymentRepository;
 import com.msa.booking.payment.persistence.repository.PenaltyRepository;
 import com.msa.booking.payment.persistence.repository.RefundRepository;
 import com.msa.booking.payment.persistence.repository.SuspensionRepository;
+import com.msa.booking.payment.storage.BillingDocumentStorageService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -75,6 +76,8 @@ class BookingLifecycleServiceImplTest {
     private NotificationService notificationService;
     @Mock
     private SettlementLifecycleService settlementLifecycleService;
+    @Mock
+    private BillingDocumentStorageService billingDocumentStorageService;
 
     private BookingLifecycleServiceImpl service;
 
@@ -92,7 +95,8 @@ class BookingLifecycleServiceImplTest {
                 bookingPolicyService,
                 bookingHistoryService,
                 notificationService,
-                settlementLifecycleService
+                settlementLifecycleService,
+                billingDocumentStorageService
         );
 
         when(bookingRepository.save(any(BookingEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));

@@ -2,17 +2,16 @@ package com.msa.booking.payment.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.msa.booking.payment.common.api.ApiResponse;
+import com.msa.booking.payment.persistence.entity.UserSessionEntity;
+import com.msa.booking.payment.persistence.repository.UserSessionRepository;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.time.Instant;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.stream.Collectors;
 import org.springframework.http.HttpMethod;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -22,16 +21,16 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @Component
 public class BearerAuthenticationFilter extends OncePerRequestFilter {
     private final AccessTokenService accessTokenService;
-    private final NamedParameterJdbcTemplate jdbcTemplate;
+    private final UserSessionRepository userSessionRepository;
     private final ObjectMapper objectMapper;
 
     public BearerAuthenticationFilter(
             AccessTokenService accessTokenService,
-            NamedParameterJdbcTemplate jdbcTemplate,
+            UserSessionRepository userSessionRepository,
             ObjectMapper objectMapper
     ) {
         this.accessTokenService = accessTokenService;
-        this.jdbcTemplate = jdbcTemplate;
+        this.userSessionRepository = userSessionRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -68,30 +67,16 @@ public class BearerAuthenticationFilter extends OncePerRequestFilter {
     }
 
     private void validateSession(AuthenticatedUser authenticatedUser) {
-        Map<String, Object> session = jdbcTemplate.query("""
-                SELECT revoked_at, expires_at
-                FROM user_sessions
-                WHERE id = :sessionId
-                  AND user_id = :userId
-                """, Map.of(
-                "sessionId", authenticatedUser.sessionId(),
-                "userId", authenticatedUser.userId()
-        ), rs -> {
-            if (!rs.next()) {
-                return null;
-            }
-            Map<String, Object> values = new HashMap<>();
-            values.put("revokedAt", rs.getTimestamp("revoked_at"));
-            values.put("expiresAt", rs.getTimestamp("expires_at").toInstant());
-            return values;
-        });
+        UserSessionEntity session = userSessionRepository
+                .findByIdAndUserId(authenticatedUser.sessionId(), authenticatedUser.userId())
+                .orElse(null);
         if (session == null) {
             throw new SecurityAuthenticationException("Active session not found for access token");
         }
-        if (session.get("revokedAt") != null) {
+        if (session.getRevokedAt() != null) {
             throw new SecurityAuthenticationException("Session has been revoked");
         }
-        Instant expiresAt = (Instant) session.get("expiresAt");
+        Instant expiresAt = session.getExpiresAt() == null ? null : session.getExpiresAt().toInstant();
         if (expiresAt != null && Instant.now().isAfter(expiresAt)) {
             throw new SecurityAuthenticationException("Session has expired");
         }

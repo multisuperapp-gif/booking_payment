@@ -21,6 +21,10 @@ public record ShopOrderData(
         BigDecimal totalAmount,
         String currencyCode,
         Long amountInPaise,
-        String note
+        String note,
+        String invoiceObjectKey,
+        String invoiceAccessUrl,
+        String refundDocumentObjectKey,
+        String refundDocumentAccessUrl
 ) {
 }

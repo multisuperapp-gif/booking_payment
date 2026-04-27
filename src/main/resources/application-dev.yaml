@@ -5,9 +5,25 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: none
     show-sql: true
 
 logging:
   level:
     root: DEBUG
+
+app:
+  storage:
+    provider: ${APP_STORAGE_PROVIDER:LOCAL}
+    aws-region: ${AWS_REGION:us-east-1}
+    billing-docs:
+      bucket: msa-billing-docs-dev
+    temp-upload:
+      bucket: msa-upload-temp-dev
+    prefixes:
+      labour-invoices: invoices/labour
+      service-invoices: invoices/service
+      shop-invoices: invoices/shop
+      refund-credit-notes: refunds/credit-notes
+      settlements: settlements
+      multipart: multipart

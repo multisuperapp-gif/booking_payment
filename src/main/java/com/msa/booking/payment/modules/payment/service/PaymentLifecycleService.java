@@ -7,6 +7,8 @@ import com.msa.booking.payment.common.exception.ResourceNotFoundException;
 import com.msa.booking.payment.config.RazorpayProperties;
 import com.msa.booking.payment.booking.support.BookingPolicyService;
 import com.msa.booking.payment.domain.enums.BookingLifecycleStatus;
+import com.msa.booking.payment.domain.enums.BookingActionOtpStatus;
+import com.msa.booking.payment.domain.enums.BookingOtpPurpose;
 import com.msa.booking.payment.domain.enums.OrderLifecycleStatus;
 import com.msa.booking.payment.domain.enums.PayablePaymentStatus;
 import com.msa.booking.payment.domain.enums.PayableType;
@@ -14,6 +16,7 @@ import com.msa.booking.payment.domain.enums.PaymentAttemptStatus;
 import com.msa.booking.payment.domain.enums.PaymentLifecycleStatus;
 import com.msa.booking.payment.domain.enums.PaymentTransactionStatus;
 import com.msa.booking.payment.domain.enums.PaymentTransactionType;
+import com.msa.booking.payment.domain.enums.BookingRequestCandidateStatus;
 import com.msa.booking.payment.modules.payment.dto.PaymentDtos.PaymentInitiateRequest;
 import com.msa.booking.payment.modules.payment.dto.PaymentDtos.PaymentInitiateResponse;
 import com.msa.booking.payment.modules.payment.dto.PaymentDtos.PaymentFailureRequest;
@@ -22,21 +25,26 @@ import com.msa.booking.payment.modules.payment.dto.PaymentDtos.PaymentVerifyRequ
 import com.msa.booking.payment.modules.payment.dto.PaymentDtos.WebhookAcknowledgeResponse;
 import com.msa.booking.payment.modules.settlement.service.SettlementLifecycleService;
 import com.msa.booking.payment.notification.service.NotificationService;
+import com.msa.booking.payment.order.service.ShopOrderFinanceContextService;
 import com.msa.booking.payment.persistence.entity.BookingEntity;
 import com.msa.booking.payment.persistence.entity.BookingRequestEntity;
-import com.msa.booking.payment.persistence.entity.OrderEntity;
 import com.msa.booking.payment.persistence.entity.PaymentAttemptEntity;
 import com.msa.booking.payment.persistence.entity.PaymentEntity;
 import com.msa.booking.payment.persistence.entity.PaymentTransactionEntity;
-import com.msa.booking.payment.persistence.entity.OrderItemEntity;
+import com.msa.booking.payment.persistence.entity.BookingStatusHistoryEntity;
+import com.msa.booking.payment.persistence.entity.BookingActionOtpEntity;
+import com.msa.booking.payment.persistence.entity.BookingRequestCandidateEntity;
+import com.msa.booking.payment.persistence.repository.BookingActionOtpRepository;
 import com.msa.booking.payment.persistence.repository.BookingRepository;
 import com.msa.booking.payment.persistence.repository.BookingRequestRepository;
-import com.msa.booking.payment.persistence.repository.OrderItemRepository;
-import com.msa.booking.payment.persistence.repository.OrderRepository;
+import com.msa.booking.payment.persistence.repository.BookingRequestCandidateRepository;
+import com.msa.booking.payment.persistence.repository.BookingStatusHistoryRepository;
 import com.msa.booking.payment.persistence.repository.PaymentAttemptRepository;
 import com.msa.booking.payment.persistence.repository.PaymentRepository;
 import com.msa.booking.payment.persistence.repository.PaymentTransactionRepository;
 import com.msa.booking.payment.persistence.repository.ShopOrderSupportRepository;
+import com.msa.booking.payment.storage.BillingDocumentLink;
+import com.msa.booking.payment.storage.BillingDocumentStorageService;
 import com.razorpay.Order;
 import com.razorpay.RazorpayClient;
 import java.math.BigDecimal;
@@ -45,8 +53,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 import org.json.JSONObject;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -57,54 +63,60 @@ public class PaymentLifecycleService {
     private final PaymentRepository paymentRepository;
     private final PaymentAttemptRepository paymentAttemptRepository;
     private final PaymentTransactionRepository paymentTransactionRepository;
-    private final OrderRepository orderRepository;
-    private final OrderItemRepository orderItemRepository;
     private final ShopOrderSupportRepository shopOrderSupportRepository;
     private final BookingRepository bookingRepository;
     private final BookingRequestRepository bookingRequestRepository;
-    private final NamedParameterJdbcTemplate jdbcTemplate;
+    private final BookingRequestCandidateRepository bookingRequestCandidateRepository;
+    private final BookingStatusHistoryRepository bookingStatusHistoryRepository;
+    private final BookingActionOtpRepository bookingActionOtpRepository;
     private final RazorpayProperties razorpayProperties;
     private final RazorpaySignatureService razorpaySignatureService;
     private final PaymentWebhookEventService paymentWebhookEventService;
     private final SettlementLifecycleService settlementLifecycleService;
     private final NotificationService notificationService;
     private final BookingPolicyService bookingPolicyService;
+    private final ShopOrderFinanceContextService shopOrderFinanceContextService;
     private final ObjectMapper objectMapper;
+    private final BillingDocumentStorageService billingDocumentStorageService;
 
     public PaymentLifecycleService(
             PaymentRepository paymentRepository,
             PaymentAttemptRepository paymentAttemptRepository,
             PaymentTransactionRepository paymentTransactionRepository,
-            OrderRepository orderRepository,
-            OrderItemRepository orderItemRepository,
             ShopOrderSupportRepository shopOrderSupportRepository,
             BookingRepository bookingRepository,
             BookingRequestRepository bookingRequestRepository,
-            NamedParameterJdbcTemplate jdbcTemplate,
+            BookingRequestCandidateRepository bookingRequestCandidateRepository,
+            BookingStatusHistoryRepository bookingStatusHistoryRepository,
+            BookingActionOtpRepository bookingActionOtpRepository,
             RazorpayProperties razorpayProperties,
             RazorpaySignatureService razorpaySignatureService,
             PaymentWebhookEventService paymentWebhookEventService,
             SettlementLifecycleService settlementLifecycleService,
             NotificationService notificationService,
             BookingPolicyService bookingPolicyService,
-            ObjectMapper objectMapper
+            ShopOrderFinanceContextService shopOrderFinanceContextService,
+            ObjectMapper objectMapper,
+            BillingDocumentStorageService billingDocumentStorageService
     ) {
         this.paymentRepository = paymentRepository;
         this.paymentAttemptRepository = paymentAttemptRepository;
         this.paymentTransactionRepository = paymentTransactionRepository;
-        this.orderRepository = orderRepository;
-        this.orderItemRepository = orderItemRepository;
         this.shopOrderSupportRepository = shopOrderSupportRepository;
         this.bookingRepository = bookingRepository;
         this.bookingRequestRepository = bookingRequestRepository;
-        this.jdbcTemplate = jdbcTemplate;
+        this.bookingRequestCandidateRepository = bookingRequestCandidateRepository;
+        this.bookingStatusHistoryRepository = bookingStatusHistoryRepository;
+        this.bookingActionOtpRepository = bookingActionOtpRepository;
         this.razorpayProperties = razorpayProperties;
         this.razorpaySignatureService = razorpaySignatureService;
         this.paymentWebhookEventService = paymentWebhookEventService;
         this.settlementLifecycleService = settlementLifecycleService;
         this.notificationService = notificationService;
         this.bookingPolicyService = bookingPolicyService;
+        this.shopOrderFinanceContextService = shopOrderFinanceContextService;
         this.objectMapper = objectMapper;
+        this.billingDocumentStorageService = billingDocumentStorageService;
     }
 
     @Transactional(readOnly = true)
@@ -307,21 +319,21 @@ public class PaymentLifecycleService {
         paymentRepository.save(payment);
         syncSuccessState(payment);
         settlementLifecycleService.recordSuccessfulPayment(payment);
+        storePaymentInvoice(payment);
         notifyPaymentSuccess(payment);
     }
 
     private void notifyPaymentPending(PaymentEntity payment) {
-        if (payment.getPayableType() == PayableType.ORDER) {
-            OrderEntity order = orderRepository.findById(payment.getPayableId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Linked order not found"));
+        if (payment.getPayableType() == PayableType.SHOP_ORDER) {
+            var order = shopOrderFinanceContextService.loadRequired(payment.getPayableId());
             notificationService.notifyUser(
                     payment.getPayerUserId(),
                     "SHOP_ORDER_PAYMENT_PENDING",
                     "Complete your payment",
                     "Your shop order payment is waiting for completion.",
                     Map.of(
-                            "orderId", order.getId(),
-                            "orderCode", order.getOrderCode(),
+                            "orderId", order.orderId(),
+                            "orderCode", order.orderCode(),
                             "paymentCode", payment.getPaymentCode()
                     )
             );
@@ -363,17 +375,16 @@ public class PaymentLifecycleService {
     }
 
     private void notifyPaymentSuccess(PaymentEntity payment) {
-        if (payment.getPayableType() == PayableType.ORDER) {
-            OrderEntity order = orderRepository.findById(payment.getPayableId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Linked order not found"));
+        if (payment.getPayableType() == PayableType.SHOP_ORDER) {
+            var order = shopOrderFinanceContextService.loadRequired(payment.getPayableId());
             notificationService.notifyUser(
                     payment.getPayerUserId(),
                     "SHOP_ORDER_PAYMENT_SUCCESS",
                     "Payment successful",
                     "Your shop order payment was completed successfully.",
                     Map.of(
-                            "orderId", order.getId(),
-                            "orderCode", order.getOrderCode(),
+                            "orderId", order.orderId(),
+                            "orderCode", order.orderCode(),
                             "paymentCode", payment.getPaymentCode()
                     )
             );
@@ -415,17 +426,16 @@ public class PaymentLifecycleService {
     }
 
     private void notifyPaymentFailed(PaymentEntity payment) {
-        if (payment.getPayableType() == PayableType.ORDER) {
-            OrderEntity order = orderRepository.findById(payment.getPayableId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Linked order not found"));
+        if (payment.getPayableType() == PayableType.SHOP_ORDER) {
+            var order = shopOrderFinanceContextService.loadRequired(payment.getPayableId());
             notificationService.notifyUser(
                     payment.getPayerUserId(),
                     "SHOP_ORDER_PAYMENT_FAILED",
                     "Payment not completed",
                     "Your shop order payment could not be completed.",
                     Map.of(
-                            "orderId", order.getId(),
-                            "orderCode", order.getOrderCode(),
+                            "orderId", order.orderId(),
+                            "orderCode", order.orderCode(),
                             "paymentCode", payment.getPaymentCode()
                     )
             );
@@ -467,18 +477,22 @@ public class PaymentLifecycleService {
     }
 
     private void syncSuccessState(PaymentEntity payment) {
-        if (payment.getPayableType() == PayableType.ORDER) {
-            OrderEntity order = orderRepository.findById(payment.getPayableId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Linked order not found"));
-            OrderLifecycleStatus oldStatus = order.getOrderStatus();
-            order.setPaymentStatus(PayablePaymentStatus.PAID);
-            if (oldStatus == OrderLifecycleStatus.CREATED
-                    || oldStatus == OrderLifecycleStatus.ACCEPTED
-                    || oldStatus == OrderLifecycleStatus.PAYMENT_PENDING) {
-                order.setOrderStatus(OrderLifecycleStatus.PAYMENT_COMPLETED);
-                insertOrderStatusHistory(order.getId(), oldStatus.name(), OrderLifecycleStatus.PAYMENT_COMPLETED.name(), payment.getPayerUserId(), "Payment completed");
-            }
-            orderRepository.save(order);
+        if (payment.getPayableType() == PayableType.SHOP_ORDER) {
+            var order = shopOrderFinanceContextService.loadRequired(payment.getPayableId());
+            String nextStatus =
+                    OrderLifecycleStatus.CREATED.name().equalsIgnoreCase(order.orderStatus())
+                            || OrderLifecycleStatus.ACCEPTED.name().equalsIgnoreCase(order.orderStatus())
+                            || OrderLifecycleStatus.PAYMENT_PENDING.name().equalsIgnoreCase(order.orderStatus())
+                            ? OrderLifecycleStatus.PAYMENT_COMPLETED.name()
+                            : null;
+            shopOrderFinanceContextService.updateStateRequired(
+                    payment.getPayableId(),
+                    PayablePaymentStatus.PAID.name(),
+                    nextStatus,
+                    payment.getPayerUserId(),
+                    nextStatus == null ? null : "Payment completed",
+                    null
+            );
             return;
         }
 
@@ -518,24 +532,21 @@ public class PaymentLifecycleService {
         if (booking == null || booking.getId() == null || booking.getUserId() == null) {
             return;
         }
-        jdbcTemplate.update("""
-                UPDATE booking_action_otps
-                   SET otp_status = 'CANCELLED'
-                 WHERE booking_id = :bookingId
-                   AND otp_purpose = 'START_WORK'
-                   AND otp_status = 'GENERATED'
-                """, new MapSqlParameterSource("bookingId", booking.getId()));
+        bookingActionOtpRepository.updateStatusByBookingIdAndPurpose(
+                booking.getId(),
+                BookingOtpPurpose.START_WORK,
+                BookingActionOtpStatus.GENERATED,
+                BookingActionOtpStatus.CANCELLED
+        );
 
-        jdbcTemplate.update("""
-                INSERT INTO booking_action_otps
-                    (booking_id, otp_purpose, otp_code, issued_to_user_id, otp_status, expires_at)
-                VALUES
-                    (:bookingId, 'START_WORK', :otpCode, :issuedToUserId, 'GENERATED', :expiresAt)
-                """, new MapSqlParameterSource()
-                .addValue("bookingId", booking.getId())
-                .addValue("otpCode", String.valueOf(ThreadLocalRandom.current().nextInt(100000, 1_000_000)))
-                .addValue("issuedToUserId", booking.getUserId())
-                .addValue("expiresAt", resolveStartWorkOtpExpiry(booking)));
+        BookingActionOtpEntity otp = new BookingActionOtpEntity();
+        otp.setBookingId(booking.getId());
+        otp.setOtpPurpose(BookingOtpPurpose.START_WORK);
+        otp.setOtpCode(String.valueOf(ThreadLocalRandom.current().nextInt(100000, 1_000_000)));
+        otp.setIssuedToUserId(booking.getUserId());
+        otp.setOtpStatus(BookingActionOtpStatus.GENERATED);
+        otp.setExpiresAt(resolveStartWorkOtpExpiry(booking));
+        bookingActionOtpRepository.save(otp);
     }
 
     private LocalDateTime resolveStartWorkOtpExpiry(BookingEntity booking) {
@@ -545,27 +556,18 @@ public class PaymentLifecycleService {
         if (booking.getBookingType() == com.msa.booking.payment.domain.enums.BookingFlowType.SERVICE) {
             String categoryName = booking.getBookingRequestId() == null
                     ? null
-                    : jdbcTemplate.query("""
-                    SELECT COALESCE(pc.name, 'Service')
-                    FROM booking_requests br
-                    LEFT JOIN provider_categories pc ON pc.id = br.category_id
-                    WHERE br.id = :requestId
-                    """, new MapSqlParameterSource("requestId", booking.getBookingRequestId()), rs -> rs.next() ? rs.getString(1) : null);
+                    : bookingRequestRepository.findCategoryNameByRequestId(booking.getBookingRequestId()).orElse(null);
             BigDecimal distanceKm = booking.getBookingRequestId() == null
                     ? null
-                    : jdbcTemplate.query("""
-                    SELECT distance_km
-                    FROM booking_request_candidates
-                    WHERE request_id = :requestId
-                      AND provider_entity_type = :providerEntityType
-                      AND provider_entity_id = :providerEntityId
-                      AND candidate_status = 'ACCEPTED'
-                    ORDER BY id DESC
-                    LIMIT 1
-                    """, new MapSqlParameterSource()
-                            .addValue("requestId", booking.getBookingRequestId())
-                            .addValue("providerEntityType", booking.getProviderEntityType().name())
-                            .addValue("providerEntityId", booking.getProviderEntityId()), rs -> rs.next() ? rs.getBigDecimal(1) : null);
+                    : bookingRequestCandidateRepository
+                            .findTopByRequestIdAndProviderEntityTypeAndProviderEntityIdAndCandidateStatusOrderByIdDesc(
+                                    booking.getBookingRequestId(),
+                                    booking.getProviderEntityType(),
+                                    booking.getProviderEntityId(),
+                                    BookingRequestCandidateStatus.ACCEPTED
+                            )
+                            .map(BookingRequestCandidateEntity::getDistanceKm)
+                            .orElse(null);
             LocalDateTime baseTime = LocalDateTime.now();
             LocalDateTime expiresAt = bookingPolicyService.resolveServiceStartWorkOtpExpiry(categoryName, distanceKm, baseTime);
             return expiresAt == null ? LocalDateTime.now().plusMinutes(bookingPolicyService.serviceDefaultReachTimelineMinutes()) : expiresAt;
@@ -576,58 +578,62 @@ public class PaymentLifecycleService {
     }
 
     private void preparePayableForRetry(PaymentEntity payment) {
-        if (payment.getPayableType() != PayableType.ORDER
+        if (payment.getPayableType() != PayableType.SHOP_ORDER
                 || payment.getPaymentStatus() != PaymentLifecycleStatus.FAILED) {
             return;
         }
 
-        OrderEntity order = orderRepository.findById(payment.getPayableId())
-                .orElseThrow(() -> new ResourceNotFoundException("Linked order not found"));
-        if (order.getPaymentStatus() == PayablePaymentStatus.PAID
-                || order.getPaymentStatus() == PayablePaymentStatus.REFUNDED) {
+        var order = shopOrderFinanceContextService.loadRequired(payment.getPayableId());
+        if (PayablePaymentStatus.PAID.name().equalsIgnoreCase(order.paymentStatus())
+                || PayablePaymentStatus.REFUNDED.name().equalsIgnoreCase(order.paymentStatus())) {
             return;
         }
 
-        if (order.getOrderStatus() == OrderLifecycleStatus.CANCELLED) {
-            reReserveOrderInventory(order);
-            insertOrderStatusHistory(
-                    order.getId(),
-                    OrderLifecycleStatus.CANCELLED.name(),
-                    OrderLifecycleStatus.PAYMENT_PENDING.name(),
-                    payment.getPayerUserId(),
-                    "Payment retry initiated"
-            );
+        if (OrderLifecycleStatus.CANCELLED.name().equalsIgnoreCase(order.orderStatus())) {
+            reReserveOrderInventory(order.orderId(), order.orderCode());
         }
 
-        order.setPaymentStatus(PayablePaymentStatus.PENDING);
-        order.setOrderStatus(OrderLifecycleStatus.PAYMENT_PENDING);
-        orderRepository.save(order);
+        shopOrderFinanceContextService.updateStateRequired(
+                payment.getPayableId(),
+                PayablePaymentStatus.PENDING.name(),
+                OrderLifecycleStatus.PAYMENT_PENDING.name(),
+                payment.getPayerUserId(),
+                "Payment retry initiated",
+                null
+        );
 
         payment.setPaymentStatus(PaymentLifecycleStatus.INITIATED);
         payment.setCompletedAt(null);
         paymentRepository.save(payment);
     }
 
-    private void reReserveOrderInventory(OrderEntity order) {
-        for (OrderItemEntity orderItem : orderItemRepository.findByOrderId(order.getId())) {
-            int reserved = shopOrderSupportRepository.reserveInventory(orderItem.getVariantId(), orderItem.getQuantity());
+    private void reReserveOrderInventory(Long orderId, String orderCode) {
+        for (var orderItem : shopOrderFinanceContextService.loadItemsRequired(orderId)) {
+            int reserved = shopOrderSupportRepository.reserveInventory(orderItem.variantId(), orderItem.quantity());
             if (reserved == 0) {
                 throw new BadRequestException(
-                        "One or more items are no longer available to retry payment for order " + order.getOrderCode() + "."
+                        "One or more items are no longer available to retry payment for order " + orderCode + "."
                 );
             }
         }
     }
 
     private void syncFailureOrPendingState(PaymentEntity payment, String targetPaymentStatus) {
-        if (payment.getPayableType() == PayableType.ORDER) {
-            OrderEntity order = orderRepository.findById(payment.getPayableId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Linked order not found"));
-            order.setPaymentStatus("FAILED".equalsIgnoreCase(targetPaymentStatus) ? PayablePaymentStatus.FAILED : PayablePaymentStatus.PENDING);
-            if (order.getOrderStatus() == OrderLifecycleStatus.CREATED || order.getOrderStatus() == OrderLifecycleStatus.ACCEPTED) {
-                order.setOrderStatus(OrderLifecycleStatus.PAYMENT_PENDING);
-            }
-            orderRepository.save(order);
+        if (payment.getPayableType() == PayableType.SHOP_ORDER) {
+            var order = shopOrderFinanceContextService.loadRequired(payment.getPayableId());
+            String nextStatus =
+                    OrderLifecycleStatus.CREATED.name().equalsIgnoreCase(order.orderStatus())
+                            || OrderLifecycleStatus.ACCEPTED.name().equalsIgnoreCase(order.orderStatus())
+                            ? OrderLifecycleStatus.PAYMENT_PENDING.name()
+                            : null;
+            shopOrderFinanceContextService.updateStateRequired(
+                    payment.getPayableId(),
+                    "FAILED".equalsIgnoreCase(targetPaymentStatus) ? PayablePaymentStatus.FAILED.name() : PayablePaymentStatus.PENDING.name(),
+                    nextStatus,
+                    payment.getPayerUserId(),
+                    null,
+                    null
+            );
             return;
         }
 
@@ -655,20 +661,24 @@ public class PaymentLifecycleService {
     }
 
     private void syncFailedState(PaymentEntity payment, String reason) {
-        if (payment.getPayableType() == PayableType.ORDER) {
-            OrderEntity order = orderRepository.findById(payment.getPayableId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Linked order not found"));
-            if (order.getPaymentStatus() == PayablePaymentStatus.PAID || order.getPaymentStatus() == PayablePaymentStatus.REFUNDED) {
+        if (payment.getPayableType() == PayableType.SHOP_ORDER) {
+            var order = shopOrderFinanceContextService.loadRequired(payment.getPayableId());
+            if (PayablePaymentStatus.PAID.name().equalsIgnoreCase(order.paymentStatus())
+                    || PayablePaymentStatus.REFUNDED.name().equalsIgnoreCase(order.paymentStatus())) {
                 return;
             }
-            OrderLifecycleStatus oldStatus = order.getOrderStatus();
-            order.setPaymentStatus(PayablePaymentStatus.FAILED);
-            if (oldStatus != OrderLifecycleStatus.CANCELLED) {
-                order.setOrderStatus(OrderLifecycleStatus.CANCELLED);
-                insertOrderStatusHistory(order.getId(), oldStatus.name(), OrderLifecycleStatus.CANCELLED.name(), payment.getPayerUserId(), reason);
-            }
-            orderRepository.save(order);
-            releaseOrderInventory(order.getId());
+            String nextStatus = OrderLifecycleStatus.CANCELLED.name().equalsIgnoreCase(order.orderStatus())
+                    ? null
+                    : OrderLifecycleStatus.CANCELLED.name();
+            shopOrderFinanceContextService.updateStateRequired(
+                    payment.getPayableId(),
+                    PayablePaymentStatus.FAILED.name(),
+                    nextStatus,
+                    payment.getPayerUserId(),
+                    nextStatus == null ? null : reason,
+                    null
+            );
+            releaseOrderInventory(payment.getPayableId());
             return;
         }
 
@@ -705,56 +715,14 @@ public class PaymentLifecycleService {
         }
     }
 
-    private void insertOrderStatusHistory(Long orderId, String oldStatus, String newStatus, Long userId, String reason) {
-        jdbcTemplate.update("""
-                INSERT INTO order_status_history (
-                    order_id,
-                    old_status,
-                    new_status,
-                    changed_by_user_id,
-                    reason,
-                    changed_at
-                ) VALUES (
-                    :orderId,
-                    :oldStatus,
-                    :newStatus,
-                    :userId,
-                    :reason,
-                    :changedAt
-                )
-                """, new MapSqlParameterSource()
-                .addValue("orderId", orderId)
-                .addValue("oldStatus", oldStatus)
-                .addValue("newStatus", newStatus)
-                .addValue("userId", userId)
-                .addValue("reason", reason)
-                .addValue("changedAt", LocalDateTime.now()));
-    }
-
     private void insertBookingStatusHistory(Long bookingId, String oldStatus, String newStatus, Long userId, String reason) {
-        jdbcTemplate.update("""
-                INSERT INTO booking_status_history (
-                    booking_id,
-                    old_status,
-                    new_status,
-                    changed_by_user_id,
-                    reason,
-                    changed_at
-                ) VALUES (
-                    :bookingId,
-                    :oldStatus,
-                    :newStatus,
-                    :userId,
-                    :reason,
-                    :changedAt
-                )
-                """, new MapSqlParameterSource()
-                .addValue("bookingId", bookingId)
-                .addValue("oldStatus", oldStatus)
-                .addValue("newStatus", newStatus)
-                .addValue("userId", userId)
-                .addValue("reason", reason)
-                .addValue("changedAt", LocalDateTime.now()));
+        BookingStatusHistoryEntity history = new BookingStatusHistoryEntity();
+        history.setBookingId(bookingId);
+        history.setOldStatus(oldStatus);
+        history.setNewStatus(newStatus);
+        history.setChangedByUserId(userId);
+        history.setReason(reason);
+        bookingStatusHistoryRepository.save(history);
     }
 
     private PaymentEntity getPayment(String paymentCode) {
@@ -779,6 +747,7 @@ public class PaymentLifecycleService {
             PaymentAttemptEntity latestAttempt,
             PaymentTransactionEntity latestTransaction
     ) {
+        BillingDocumentLink invoiceLink = resolvePaymentInvoiceLink(payment);
         return new PaymentStatusResponse(
                 payment.getId(),
                 payment.getPaymentCode(),
@@ -792,8 +761,68 @@ public class PaymentLifecycleService {
                 latestAttempt == null ? null : latestAttempt.getAttemptStatus().name(),
                 latestTransaction == null ? null : latestTransaction.getGatewayTransactionId(),
                 payment.getInitiatedAt(),
-                payment.getCompletedAt()
+                payment.getCompletedAt(),
+                invoiceLink.objectKey(),
+                invoiceLink.accessUrl()
         );
+    }
+
+    private void storePaymentInvoice(PaymentEntity payment) {
+        if (payment.getPaymentStatus() != PaymentLifecycleStatus.SUCCESS && payment.getPaymentStatus() != PaymentLifecycleStatus.REFUNDED) {
+            return;
+        }
+        if (payment.getPayableType() == PayableType.SHOP_ORDER) {
+            var order = shopOrderFinanceContextService.loadRequired(payment.getPayableId());
+            billingDocumentStorageService.storePaymentInvoice(
+                    payment,
+                    null,
+                    null,
+                    order.orderCode(),
+                    "Shop order payment invoice."
+            );
+            return;
+        }
+        if (payment.getPayableType() == PayableType.BOOKING) {
+            BookingEntity booking = bookingRepository.findById(payment.getPayableId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Linked booking not found"));
+            billingDocumentStorageService.storePaymentInvoice(
+                    payment,
+                    booking,
+                    null,
+                    booking.getBookingCode(),
+                    "Booking payment invoice."
+            );
+            return;
+        }
+        if (payment.getPayableType() == PayableType.BOOKING_REQUEST) {
+            BookingRequestEntity request = bookingRequestRepository.findById(payment.getPayableId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Linked booking request not found"));
+            billingDocumentStorageService.storePaymentInvoice(
+                    payment,
+                    null,
+                    request,
+                    request.getRequestCode(),
+                    "Booking request payment invoice."
+            );
+        }
+    }
+
+    private BillingDocumentLink resolvePaymentInvoiceLink(PaymentEntity payment) {
+        if (payment.getPaymentStatus() != PaymentLifecycleStatus.SUCCESS && payment.getPaymentStatus() != PaymentLifecycleStatus.REFUNDED) {
+            return new BillingDocumentLink(null, null);
+        }
+        if (payment.getPayableType() == PayableType.SHOP_ORDER) {
+            return billingDocumentStorageService.resolvePaymentInvoiceLink(payment, null, null);
+        }
+        if (payment.getPayableType() == PayableType.BOOKING) {
+            BookingEntity booking = bookingRepository.findById(payment.getPayableId()).orElse(null);
+            return billingDocumentStorageService.resolvePaymentInvoiceLink(payment, booking, null);
+        }
+        if (payment.getPayableType() == PayableType.BOOKING_REQUEST) {
+            BookingRequestEntity request = bookingRequestRepository.findById(payment.getPayableId()).orElse(null);
+            return billingDocumentStorageService.resolvePaymentInvoiceLink(payment, null, request);
+        }
+        return new BillingDocumentLink(null, null);
     }
 
     private PaymentInitiateResponse toInitiateResponse(PaymentEntity payment, PaymentAttemptEntity attempt) {
@@ -887,15 +916,8 @@ public class PaymentLifecycleService {
     }
 
     private void releaseOrderInventory(Long orderId) {
-        for (OrderItemEntity item : orderItemRepository.findByOrderId(orderId)) {
-            jdbcTemplate.update("""
-                    UPDATE inventory
-                    SET reserved_quantity = GREATEST(COALESCE(reserved_quantity, 0) - :quantity, 0),
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE variant_id = :variantId
-                    """, new MapSqlParameterSource()
-                    .addValue("quantity", item.getQuantity())
-                    .addValue("variantId", item.getVariantId()));
+        for (var item : shopOrderFinanceContextService.loadItemsRequired(orderId)) {
+            shopOrderSupportRepository.releaseReservedInventory(item.variantId(), item.quantity());
         }
     }
 
@@ -905,12 +927,11 @@ public class PaymentLifecycleService {
                 || payment.getPaymentStatus() == PaymentLifecycleStatus.REFUNDED) {
             return true;
         }
-        if (payment.getPayableType() == PayableType.ORDER) {
-            OrderEntity order = orderRepository.findById(payment.getPayableId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Linked order not found"));
-            return order.getOrderStatus() == OrderLifecycleStatus.CANCELLED
-                    || order.getPaymentStatus() == PayablePaymentStatus.FAILED
-                    || order.getPaymentStatus() == PayablePaymentStatus.REFUNDED;
+        if (payment.getPayableType() == PayableType.SHOP_ORDER) {
+            var order = shopOrderFinanceContextService.loadRequired(payment.getPayableId());
+            return OrderLifecycleStatus.CANCELLED.name().equalsIgnoreCase(order.orderStatus())
+                    || PayablePaymentStatus.FAILED.name().equalsIgnoreCase(order.paymentStatus())
+                    || PayablePaymentStatus.REFUNDED.name().equalsIgnoreCase(order.paymentStatus());
         }
         if (payment.getPayableType() == PayableType.BOOKING) {
             BookingEntity booking = bookingRepository.findById(payment.getPayableId())
@@ -933,11 +954,10 @@ public class PaymentLifecycleService {
                 || payment.getPaymentStatus() == PaymentLifecycleStatus.REFUNDED) {
             return true;
         }
-        if (payment.getPayableType() == PayableType.ORDER) {
-            OrderEntity order = orderRepository.findById(payment.getPayableId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Linked order not found"));
-            return order.getPaymentStatus() == PayablePaymentStatus.PAID
-                    || order.getPaymentStatus() == PayablePaymentStatus.REFUNDED;
+        if (payment.getPayableType() == PayableType.SHOP_ORDER) {
+            var order = shopOrderFinanceContextService.loadRequired(payment.getPayableId());
+            return PayablePaymentStatus.PAID.name().equalsIgnoreCase(order.paymentStatus())
+                    || PayablePaymentStatus.REFUNDED.name().equalsIgnoreCase(order.paymentStatus());
         }
         if (payment.getPayableType() == PayableType.BOOKING) {
             BookingEntity booking = bookingRepository.findById(payment.getPayableId())

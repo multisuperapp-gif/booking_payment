@@ -9,6 +9,7 @@ public record UpdateShopOrderStatusRequest(
         @NotNull(message = "status is required")
         OrderLifecycleStatus newStatus,
         Long changedByUserId,
-        String reason
+        String reason,
+        String refundPolicyApplied
 ) {
 }

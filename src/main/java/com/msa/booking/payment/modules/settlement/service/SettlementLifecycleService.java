@@ -4,16 +4,16 @@ import com.msa.booking.payment.common.exception.ResourceNotFoundException;
 import com.msa.booking.payment.domain.enums.PayableType;
 import com.msa.booking.payment.domain.enums.ProviderEntityType;
 import com.msa.booking.payment.persistence.entity.BookingEntity;
-import com.msa.booking.payment.persistence.entity.OrderEntity;
 import com.msa.booking.payment.persistence.entity.PaymentEntity;
 import com.msa.booking.payment.persistence.entity.SettlementCycleEntity;
 import com.msa.booking.payment.persistence.entity.SettlementEntity;
 import com.msa.booking.payment.persistence.entity.SettlementLineItemEntity;
+import com.msa.booking.payment.order.service.ShopOrderFinanceContextService;
 import com.msa.booking.payment.persistence.repository.BookingRepository;
-import com.msa.booking.payment.persistence.repository.OrderRepository;
 import com.msa.booking.payment.persistence.repository.SettlementCycleRepository;
 import com.msa.booking.payment.persistence.repository.SettlementLineItemRepository;
 import com.msa.booking.payment.persistence.repository.SettlementRepository;
+import com.msa.booking.payment.storage.BillingDocumentStorageService;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
@@ -27,7 +27,7 @@ public class SettlementLifecycleService {
     private static final String DAILY = "DAILY";
     private static final String OPEN = "OPEN";
     private static final String PENDING = "PENDING";
-    private static final String SOURCE_ORDER = "ORDER";
+    private static final String SOURCE_ORDER = "SHOP_ORDER";
     private static final String SOURCE_BOOKING = "BOOKING";
     private static final String LINE_GROSS = "GROSS";
     private static final String LINE_COMMISSION = "COMMISSION";
@@ -38,26 +38,29 @@ public class SettlementLifecycleService {
     private final SettlementCycleRepository settlementCycleRepository;
     private final SettlementRepository settlementRepository;
     private final SettlementLineItemRepository settlementLineItemRepository;
-    private final OrderRepository orderRepository;
     private final BookingRepository bookingRepository;
+    private final ShopOrderFinanceContextService shopOrderFinanceContextService;
+    private final BillingDocumentStorageService billingDocumentStorageService;
 
     public SettlementLifecycleService(
             SettlementCycleRepository settlementCycleRepository,
             SettlementRepository settlementRepository,
             SettlementLineItemRepository settlementLineItemRepository,
-            OrderRepository orderRepository,
-            BookingRepository bookingRepository
+            BookingRepository bookingRepository,
+            ShopOrderFinanceContextService shopOrderFinanceContextService,
+            BillingDocumentStorageService billingDocumentStorageService
     ) {
         this.settlementCycleRepository = settlementCycleRepository;
         this.settlementRepository = settlementRepository;
         this.settlementLineItemRepository = settlementLineItemRepository;
-        this.orderRepository = orderRepository;
         this.bookingRepository = bookingRepository;
+        this.shopOrderFinanceContextService = shopOrderFinanceContextService;
+        this.billingDocumentStorageService = billingDocumentStorageService;
     }
 
     @Transactional
     public void recordSuccessfulPayment(PaymentEntity payment) {
-        if (payment.getPayableType() == PayableType.ORDER) {
+        if (payment.getPayableType() == PayableType.SHOP_ORDER) {
             recordOrderSettlement(payment);
             return;
         }
@@ -76,7 +79,7 @@ public class SettlementLifecycleService {
         if (refundAmount == null || refundAmount.signum() <= 0) {
             return;
         }
-        if (payment.getPayableType() == PayableType.ORDER) {
+        if (payment.getPayableType() == PayableType.SHOP_ORDER) {
             recordOrderRefund(payment, refundAmount);
             return;
         }
@@ -119,6 +122,7 @@ public class SettlementLifecycleService {
                 shareAmount.setScale(2, RoundingMode.HALF_UP),
                 remark == null || remark.isBlank() ? booking.getBookingCode() : remark
         );
+        billingDocumentStorageService.storeSettlementStatement(settlement, "Labour cancellation settlement statement.");
     }
 
     private void recordOrderSettlement(PaymentEntity payment) {
@@ -127,21 +131,21 @@ public class SettlementLifecycleService {
             return;
         }
 
-        OrderEntity order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new ResourceNotFoundException("Linked order not found"));
+        var order = shopOrderFinanceContextService.loadRequired(orderId);
         SettlementCycleEntity cycle = resolveDailyCycle(payment.getCompletedAt());
-        SettlementEntity settlement = resolveSettlement(cycle.getId(), "SHOP", order.getShopId());
+        SettlementEntity settlement = resolveSettlement(cycle.getId(), "SHOP", order.shopId());
 
-        BigDecimal gross = amountOrFallback(order.getTotalAmount(), payment.getAmount());
-        BigDecimal commission = amountOrZero(order.getPlatformFeeAmount());
+        BigDecimal gross = amountOrFallback(order.totalAmount(), payment.getAmount());
+        BigDecimal commission = amountOrZero(order.platformFeeAmount());
 
         appendAmounts(settlement, gross, commission);
         settlementRepository.save(settlement);
 
-        saveLineItem(settlement.getId(), SOURCE_ORDER, orderId, LINE_GROSS, gross, order.getOrderCode());
+        saveLineItem(settlement.getId(), SOURCE_ORDER, orderId, LINE_GROSS, gross, order.orderCode());
         if (commission.signum() > 0) {
-            saveLineItem(settlement.getId(), SOURCE_ORDER, orderId, LINE_COMMISSION, commission.negate(), order.getOrderCode());
+            saveLineItem(settlement.getId(), SOURCE_ORDER, orderId, LINE_COMMISSION, commission.negate(), order.orderCode());
         }
+        billingDocumentStorageService.storeSettlementStatement(settlement, "Shop settlement statement.");
     }
 
     private void recordBookingSettlement(PaymentEntity payment) {
@@ -169,6 +173,7 @@ public class SettlementLifecycleService {
         if (commission.signum() > 0) {
             saveLineItem(settlement.getId(), SOURCE_BOOKING, bookingId, LINE_COMMISSION, commission.negate(), booking.getBookingCode());
         }
+        billingDocumentStorageService.storeSettlementStatement(settlement, "Booking settlement statement.");
     }
 
     private void recordOrderRefund(PaymentEntity payment, BigDecimal refundAmount) {
@@ -176,18 +181,18 @@ public class SettlementLifecycleService {
         if (settlementLineItemRepository.existsBySourceTypeAndSourceIdAndLineType(SOURCE_ORDER, orderId, LINE_REFUND)) {
             return;
         }
-        OrderEntity order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new ResourceNotFoundException("Linked order not found"));
+        var order = shopOrderFinanceContextService.loadRequired(orderId);
         SettlementEntity settlement = resolveSettlementForRefund(
                 SOURCE_ORDER,
                 orderId,
                 payment.getCompletedAt(),
                 "SHOP",
-                order.getShopId()
+                order.shopId()
         );
         appendRefund(settlement, refundAmount);
         settlementRepository.save(settlement);
-        saveLineItem(settlement.getId(), SOURCE_ORDER, orderId, LINE_REFUND, refundAmount.negate(), order.getOrderCode());
+        saveLineItem(settlement.getId(), SOURCE_ORDER, orderId, LINE_REFUND, refundAmount.negate(), order.orderCode());
+        billingDocumentStorageService.storeSettlementStatement(settlement, "Shop refund updated settlement statement.");
     }
 
     private void recordBookingRefund(PaymentEntity payment, BigDecimal refundAmount) {
@@ -207,6 +212,7 @@ public class SettlementLifecycleService {
         appendRefund(settlement, refundAmount);
         settlementRepository.save(settlement);
         saveLineItem(settlement.getId(), SOURCE_BOOKING, bookingId, LINE_REFUND, refundAmount.negate(), booking.getBookingCode());
+        billingDocumentStorageService.storeSettlementStatement(settlement, "Booking refund updated settlement statement.");
     }
 
     private SettlementCycleEntity resolveDailyCycle(LocalDateTime completedAt) {

@@ -28,7 +28,9 @@ public final class ProviderSettlementDtos {
             LocalDate cycleEnd,
             LocalDateTime createdAt,
             LocalDateTime paidAt,
-            String remarks
+            String remarks,
+            String statementObjectKey,
+            String statementAccessUrl
     ) {
     }
 

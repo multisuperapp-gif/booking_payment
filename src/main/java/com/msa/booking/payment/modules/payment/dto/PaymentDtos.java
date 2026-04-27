@@ -40,7 +40,9 @@ public final class PaymentDtos {
             String latestAttemptStatus,
             String latestGatewayTransactionId,
             LocalDateTime initiatedAt,
-            LocalDateTime completedAt
+            LocalDateTime completedAt,
+            String invoiceObjectKey,
+            String invoiceAccessUrl
     ) {
     }
 

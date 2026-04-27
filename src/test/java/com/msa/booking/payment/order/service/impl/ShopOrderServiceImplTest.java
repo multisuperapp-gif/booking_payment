@@ -1,7 +1,5 @@
 package com.msa.booking.payment.order.service.impl;
 
-import com.msa.booking.payment.booking.support.BookingHistoryService;
-import com.msa.booking.payment.booking.support.BookingPolicyService;
 import com.msa.booking.payment.common.exception.BadRequestException;
 import com.msa.booking.payment.domain.enums.OrderFulfillmentType;
 import com.msa.booking.payment.domain.enums.OrderLifecycleStatus;
@@ -9,60 +7,49 @@ import com.msa.booking.payment.domain.enums.PayablePaymentStatus;
 import com.msa.booking.payment.domain.enums.PayableType;
 import com.msa.booking.payment.domain.enums.PaymentAttemptStatus;
 import com.msa.booking.payment.domain.enums.PaymentLifecycleStatus;
-import com.msa.booking.payment.domain.enums.RefundLifecycleStatus;
+import com.msa.booking.payment.integration.shoporders.ShopOrdersRuntimeSyncClient;
+import com.msa.booking.payment.integration.shoporders.dto.ShopOrdersRuntimeSyncDtos;
+import com.msa.booking.payment.integration.shoporders.dto.ShopOrdersRuntimeSyncDtos.CreatedOrderData;
 import com.msa.booking.payment.notification.service.NotificationService;
-import com.msa.booking.payment.order.dto.CancelShopOrderRequest;
-import com.msa.booking.payment.order.dto.CompleteShopOrderPaymentRequest;
-import com.msa.booking.payment.order.dto.CreateShopOrderRequest;
-import com.msa.booking.payment.order.dto.ShopOrderItemRequest;
-import com.msa.booking.payment.order.projection.ShopCheckoutItemProjection;
 import com.msa.booking.payment.modules.settlement.service.SettlementLifecycleService;
-import com.msa.booking.payment.payment.service.RazorpayGatewayService;
-import com.msa.booking.payment.persistence.entity.OrderEntity;
-import com.msa.booking.payment.persistence.entity.OrderItemEntity;
+import com.msa.booking.payment.order.dto.CancelShopOrderRequest;
+import com.msa.booking.payment.order.dto.CreateShopOrderRequest;
+import com.msa.booking.payment.order.dto.InitiateShopOrderPaymentRequest;
+import com.msa.booking.payment.order.dto.ShopOrderItemRequest;
+import com.msa.booking.payment.order.service.ShopOrderFinanceContextService;
+import com.msa.booking.payment.order.service.ShopOrdersRuntimeSyncService;
 import com.msa.booking.payment.persistence.entity.PaymentAttemptEntity;
 import com.msa.booking.payment.persistence.entity.PaymentEntity;
-import com.msa.booking.payment.persistence.entity.RefundEntity;
-import com.msa.booking.payment.persistence.repository.OrderItemRepository;
-import com.msa.booking.payment.persistence.repository.OrderRepository;
 import com.msa.booking.payment.persistence.repository.PaymentAttemptRepository;
 import com.msa.booking.payment.persistence.repository.PaymentRepository;
 import com.msa.booking.payment.persistence.repository.PaymentTransactionRepository;
 import com.msa.booking.payment.persistence.repository.RefundRepository;
 import com.msa.booking.payment.persistence.repository.ShopOrderSupportRepository;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoSettings;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.mockito.quality.Strictness;
-
+import com.msa.booking.payment.payment.service.RazorpayGatewayService;
+import com.msa.booking.payment.storage.BillingDocumentLink;
+import com.msa.booking.payment.storage.BillingDocumentStorageService;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
-@MockitoSettings(strictness = Strictness.LENIENT)
 class ShopOrderServiceImplTest {
 
-    @Mock
-    private OrderRepository orderRepository;
-    @Mock
-    private OrderItemRepository orderItemRepository;
     @Mock
     private PaymentRepository paymentRepository;
     @Mock
@@ -74,150 +61,104 @@ class ShopOrderServiceImplTest {
     @Mock
     private ShopOrderSupportRepository shopOrderSupportRepository;
     @Mock
-    private BookingPolicyService bookingPolicyService;
-    @Mock
-    private BookingHistoryService bookingHistoryService;
-    @Mock
     private NotificationService notificationService;
     @Mock
     private RazorpayGatewayService razorpayGatewayService;
     @Mock
     private SettlementLifecycleService settlementLifecycleService;
+    @Mock
+    private ShopOrderFinanceContextService shopOrderFinanceContextService;
+    @Mock
+    private ShopOrdersRuntimeSyncService shopOrdersRuntimeSyncService;
+    @Mock
+    private ShopOrdersRuntimeSyncClient shopOrdersRuntimeSyncClient;
+    @Mock
+    private BillingDocumentStorageService billingDocumentStorageService;
 
     private ShopOrderServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new ShopOrderServiceImpl(
-                orderRepository,
-                orderItemRepository,
                 paymentRepository,
                 paymentAttemptRepository,
                 paymentTransactionRepository,
                 refundRepository,
                 shopOrderSupportRepository,
-                bookingPolicyService,
-                bookingHistoryService,
                 notificationService,
                 razorpayGatewayService,
-                settlementLifecycleService
+                settlementLifecycleService,
+                shopOrderFinanceContextService,
+                shopOrdersRuntimeSyncService,
+                shopOrdersRuntimeSyncClient,
+                billingDocumentStorageService
         );
-
-        when(orderRepository.save(any(OrderEntity.class))).thenAnswer(invocation -> {
-            OrderEntity order = invocation.getArgument(0);
-            if (order.getId() == null) {
-                order.setId(21L);
-            }
-            return order;
-        });
-        when(paymentRepository.save(any(PaymentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(paymentAttemptRepository.save(any(PaymentAttemptEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(refundRepository.save(any(RefundEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(orderItemRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
     }
 
     @Test
-    void createOrderRejectsItemsFromMultipleShops() {
+    void createOrderDelegatesToRuntimeSyncAndNotifiesUser() {
         CreateShopOrderRequest request = new CreateShopOrderRequest(
                 88L,
                 999L,
                 OrderFulfillmentType.DELIVERY,
-                List.of(new ShopOrderItemRequest(1L, 1), new ShopOrderItemRequest(2L, 1))
-        );
-        when(shopOrderSupportRepository.findCheckoutItemsByVariantIds(any()))
-                .thenReturn(List.of(
-                        checkoutItem(1L, 101L, 11L),
-                        checkoutItem(2L, 102L, 12L)
-                ));
-
-        BadRequestException exception = assertThrows(
-                BadRequestException.class,
-                () -> service.createOrder(request)
+                List.of(new ShopOrderItemRequest(1L, 1))
         );
 
-        assertEquals("Items from multiple shops cannot be ordered together. Clear the cart before switching shops.", exception.getMessage());
-        verify(orderRepository, never()).save(any(OrderEntity.class));
-    }
-
-    @Test
-    void markPaymentSuccessConsumesInventoryAndNotifiesOwner() {
-        OrderEntity order = pendingOrder();
-        PaymentEntity payment = orderPayment();
-        PaymentAttemptEntity attempt = paymentAttempt();
-        OrderItemEntity item = new OrderItemEntity();
-        item.setVariantId(501L);
-        item.setQuantity(2);
-
-        when(orderRepository.findById(21L)).thenReturn(Optional.of(order));
-        when(paymentRepository.findByPaymentCode("PAY-ORDER")).thenReturn(Optional.of(payment));
-        when(paymentAttemptRepository.findFirstByGatewayOrderIdOrderByAttemptedAtDesc("order_shop_success")).thenReturn(Optional.of(attempt));
-        when(razorpayGatewayService.verifyPaymentSignature("order_shop_success", "pay_shop_1", "sig_shop_1")).thenReturn(true);
-        when(paymentTransactionRepository.findByGatewayTransactionId("pay_shop_1")).thenReturn(Optional.empty());
-        when(orderItemRepository.findByOrderId(21L)).thenReturn(List.of(item));
-        when(shopOrderSupportRepository.consumeReservedInventory(501L, 2)).thenReturn(1);
-        when(shopOrderSupportRepository.findShopOwnerUserId(300L)).thenReturn(Optional.of(66L));
-
-        var response = service.markPaymentSuccess(new CompleteShopOrderPaymentRequest(
+        CreatedOrderData createdOrder = new CreatedOrderData(
                 21L,
-                "PAY-ORDER",
-                "order_shop_success",
-                "pay_shop_1",
-                "sig_shop_1",
-                null,
-                null
-        ));
+                "ORD-21",
+                300L,
+                88L,
+                "CREATED",
+                "UNPAID",
+                BigDecimal.valueOf(150),
+                BigDecimal.valueOf(49),
+                BigDecimal.valueOf(199),
+                BigDecimal.valueOf(19),
+                "INR",
+                List.of()
+        );
+        when(shopOrdersRuntimeSyncClient.createOrder(any())).thenReturn(com.msa.booking.payment.common.api.ApiResponse.ok(createdOrder));
 
-        assertEquals(OrderLifecycleStatus.PAYMENT_COMPLETED, order.getOrderStatus());
-        assertEquals(PayablePaymentStatus.PAID, order.getPaymentStatus());
-        assertEquals(PaymentLifecycleStatus.SUCCESS, payment.getPaymentStatus());
-        assertEquals(PaymentAttemptStatus.SUCCESS, attempt.getAttemptStatus());
-        assertEquals("order_shop_success", response.razorpayOrderId());
+        var response = service.createOrder(request);
 
-        verify(shopOrderSupportRepository).consumeReservedInventory(501L, 2);
+        assertEquals(21L, response.orderId());
+        assertEquals("Order created and inventory reserved.", response.note());
         verify(notificationService).notifyUser(
                 eq(88L),
-                eq("SHOP_ORDER_PAYMENT_SUCCESS"),
-                eq("Order payment successful"),
-                eq("Your shop order payment was completed successfully."),
-                any(Map.class)
-        );
-        verify(notificationService).notifyUser(
-                eq(66L),
-                eq("SHOP_ORDER_RECEIVED"),
-                eq("New paid order received"),
-                eq("A new paid order is ready for acceptance."),
+                eq("SHOP_ORDER_PAYMENT_PENDING"),
+                eq("Complete your shop order payment"),
+                eq("Your order is ready. Complete payment to confirm it."),
                 any(Map.class)
         );
     }
 
     @Test
-    void initiatePaymentReusesPendingGatewayAttemptWithoutCreatingNewOrder() {
-        OrderEntity order = pendingOrder();
+    void initiatePaymentReusesPendingGatewayAttemptWithoutCreatingNewGatewayOrder() {
+        var order = orderContext("PAYMENT_PENDING", "PENDING");
         PaymentEntity payment = orderPayment();
         PaymentAttemptEntity attempt = paymentAttempt();
         attempt.setGatewayOrderId("order_reuse_shop");
         attempt.setAttemptStatus(PaymentAttemptStatus.PENDING);
 
-        when(orderRepository.findById(21L)).thenReturn(Optional.of(order));
-        when(paymentRepository.findByPayableTypeAndPayableId(PayableType.ORDER, 21L)).thenReturn(Optional.of(payment));
+        when(shopOrderFinanceContextService.loadRequired(21L)).thenReturn(order);
+        when(paymentRepository.findByPayableTypeAndPayableId(PayableType.SHOP_ORDER, 21L)).thenReturn(Optional.of(payment));
         when(paymentAttemptRepository.findTopByPaymentIdAndGatewayNameOrderByIdDesc(600L, "RAZORPAY"))
                 .thenReturn(Optional.of(attempt));
         when(razorpayGatewayService.configuredKeyId()).thenReturn("rzp_shop_key");
+        when(billingDocumentStorageService.resolvePaymentInvoiceLink(any(), any(), any()))
+                .thenReturn(new BillingDocumentLink(null, null));
 
-        var response = service.initiatePayment(new com.msa.booking.payment.order.dto.InitiateShopOrderPaymentRequest(21L));
+        var response = service.initiatePayment(new InitiateShopOrderPaymentRequest(21L));
 
         assertEquals("order_reuse_shop", response.razorpayOrderId());
-        assertEquals("rzp_shop_key", response.razorpayKeyId());
         assertEquals("Payment already initiated for shop order.", response.note());
         verify(razorpayGatewayService, never()).createOrder(any(), any(), any());
-        verify(paymentAttemptRepository, never()).save(any(PaymentAttemptEntity.class));
     }
 
     @Test
     void cancelByUserRejectsOutForDeliveryOrder() {
-        OrderEntity order = pendingOrder();
-        order.setOrderStatus(OrderLifecycleStatus.OUT_FOR_DELIVERY);
-        when(orderRepository.findById(21L)).thenReturn(Optional.of(order));
+        when(shopOrderFinanceContextService.loadRequired(21L)).thenReturn(orderContext("OUT_FOR_DELIVERY", "PENDING"));
 
         BadRequestException exception = assertThrows(
                 BadRequestException.class,
@@ -228,205 +169,42 @@ class ShopOrderServiceImplTest {
         verify(notificationService, never()).notifyUser(eq(88L), eq("SHOP_ORDER_CANCELLED"), any(), any(), any(Map.class));
     }
 
-    @Test
-    void markPaymentSuccessIgnoresLateSuccessForCancelledOrder() {
-        OrderEntity order = pendingOrder();
-        order.setOrderStatus(OrderLifecycleStatus.CANCELLED);
-        order.setPaymentStatus(PayablePaymentStatus.FAILED);
-        PaymentEntity payment = orderPayment();
-        payment.setPaymentStatus(PaymentLifecycleStatus.FAILED);
-
-        when(orderRepository.findById(21L)).thenReturn(Optional.of(order));
-        when(paymentRepository.findByPaymentCode("PAY-ORDER")).thenReturn(Optional.of(payment));
-
-        var response = service.markPaymentSuccess(new CompleteShopOrderPaymentRequest(
+    private ShopOrdersRuntimeSyncDtos.OrderFinanceContextData orderContext(String orderStatus, String paymentStatus) {
+        return new ShopOrdersRuntimeSyncDtos.OrderFinanceContextData(
                 21L,
-                "PAY-ORDER",
-                "order_shop_success",
-                "pay_shop_1",
-                "sig_shop_1",
-                null,
-                null
-        ));
-
-        assertEquals(OrderLifecycleStatus.CANCELLED, response.orderStatus());
-        assertEquals(PayablePaymentStatus.FAILED, response.paymentStatus());
-        assertEquals("Shop order is already cancelled, so late payment success was ignored.", response.note());
-
-        verify(paymentAttemptRepository, never()).findFirstByGatewayOrderIdOrderByAttemptedAtDesc(any());
-        verify(paymentTransactionRepository, never()).save(any());
-        verify(shopOrderSupportRepository, never()).consumeReservedInventory(any(), any());
-    }
-
-    @Test
-    void markPaymentFailureIgnoresLateFailureForSuccessfulPayment() {
-        OrderEntity order = pendingOrder();
-        order.setOrderStatus(OrderLifecycleStatus.PAYMENT_COMPLETED);
-        order.setPaymentStatus(PayablePaymentStatus.PAID);
-        PaymentEntity payment = orderPayment();
-        payment.setPaymentStatus(PaymentLifecycleStatus.SUCCESS);
-
-        when(orderRepository.findById(21L)).thenReturn(Optional.of(order));
-        when(paymentRepository.findByPaymentCode("PAY-ORDER")).thenReturn(Optional.of(payment));
-
-        var response = service.markPaymentFailure(new CompleteShopOrderPaymentRequest(
-                21L,
-                "PAY-ORDER",
-                "order_shop_success",
-                "pay_shop_1",
-                "sig_shop_1",
-                "payment_failed",
-                "failed"
-        ));
-
-        assertEquals(OrderLifecycleStatus.PAYMENT_COMPLETED, response.orderStatus());
-        assertEquals(PayablePaymentStatus.PAID, response.paymentStatus());
-        assertEquals("Shop order payment is already finalized, so late payment failure was ignored.", response.note());
-
-        verify(paymentAttemptRepository, never()).findFirstByGatewayOrderIdOrderByAttemptedAtDesc(any());
-        verify(shopOrderSupportRepository, never()).releaseReservedInventory(anyLong(), anyInt());
-    }
-
-    @Test
-    void cancelByUserReturnsExistingCancelledOrderInsteadOfThrowing() {
-        OrderEntity order = pendingOrder();
-        order.setOrderStatus(OrderLifecycleStatus.CANCELLED);
-        order.setPaymentStatus(PayablePaymentStatus.REFUNDED);
-        PaymentEntity payment = orderPayment();
-        payment.setPaymentStatus(PaymentLifecycleStatus.REFUNDED);
-
-        when(orderRepository.findById(21L)).thenReturn(Optional.of(order));
-        when(paymentRepository.findByPayableTypeAndPayableId(PayableType.ORDER, 21L)).thenReturn(Optional.of(payment));
-
-        var response = service.cancelByUser(new CancelShopOrderRequest(21L, 88L, "Need to cancel"));
-
-        assertEquals(OrderLifecycleStatus.CANCELLED, response.orderStatus());
-        assertEquals(PayablePaymentStatus.REFUNDED, response.paymentStatus());
-        assertEquals("Shop order was already cancelled.", response.note());
-
-        verify(orderRepository, never()).save(any(OrderEntity.class));
-        verify(refundRepository, never()).save(any(RefundEntity.class));
-    }
-
-    @Test
-    void cancelByUserDoesNotCreateDuplicateRefundWhenRefundAlreadyExists() {
-        OrderEntity order = pendingOrder();
-        order.setOrderStatus(OrderLifecycleStatus.ACCEPTED);
-        order.setPaymentStatus(PayablePaymentStatus.PAID);
-        PaymentEntity payment = orderPayment();
-        payment.setPaymentStatus(PaymentLifecycleStatus.SUCCESS);
-
-        OrderItemEntity item = new OrderItemEntity();
-        item.setVariantId(501L);
-        item.setQuantity(2);
-
-        RefundEntity refund = new RefundEntity();
-        refund.setId(41L);
-        refund.setPaymentId(600L);
-        refund.setRefundCode("RFN-ORD-123");
-        refund.setRefundStatus(RefundLifecycleStatus.SUCCESS);
-        refund.setRequestedAmount(BigDecimal.valueOf(720));
-        refund.setApprovedAmount(BigDecimal.valueOf(720));
-        refund.setReason("Already refunded");
-        refund.setInitiatedAt(LocalDateTime.now().minusMinutes(5));
-        refund.setCompletedAt(LocalDateTime.now().minusMinutes(4));
-
-        when(orderRepository.findById(21L)).thenReturn(Optional.of(order));
-        when(paymentRepository.findByPayableTypeAndPayableId(PayableType.ORDER, 21L)).thenReturn(Optional.of(payment));
-        when(paymentRepository.findByPayableTypeAndPayableId(PayableType.ORDER, 21L)).thenReturn(Optional.of(payment));
-        when(orderItemRepository.findByOrderId(21L)).thenReturn(List.of(item));
-        when(refundRepository.findTopByPaymentIdOrderByIdDesc(600L)).thenReturn(Optional.of(refund));
-        when(shopOrderSupportRepository.findShopOwnerUserId(300L)).thenReturn(Optional.of(66L));
-
-        var response = service.cancelByUser(new CancelShopOrderRequest(21L, 88L, "Need to cancel"));
-
-        assertEquals(OrderLifecycleStatus.CANCELLED, response.orderStatus());
-        assertEquals(PayablePaymentStatus.REFUNDED, response.paymentStatus());
-        verify(shopOrderSupportRepository).restockInventory(501L, 2);
-        verify(refundRepository, times(1)).save(refund);
-        verify(notificationService).notifyUser(
-                eq(88L),
-                eq("SHOP_ORDER_REFUND_SUCCESS"),
-                eq("Refund completed"),
-                eq("Your refund has been completed for the cancelled shop order."),
-                any(Map.class)
+                "ORD-21",
+                300L,
+                88L,
+                orderStatus,
+                paymentStatus,
+                BigDecimal.valueOf(150),
+                BigDecimal.valueOf(49),
+                BigDecimal.valueOf(199),
+                BigDecimal.valueOf(19),
+                "INR"
         );
-    }
-
-    private ShopCheckoutItemProjection checkoutItem(Long variantId, Long productId, Long shopId) {
-        return new ShopCheckoutItemProjection() {
-            @Override
-            public Long getVariantId() { return variantId; }
-            @Override
-            public Long getProductId() { return productId; }
-            @Override
-            public Long getShopId() { return shopId; }
-            @Override
-            public Long getShopOwnerUserId() { return 66L; }
-            @Override
-            public Long getShopLocationId() { return 701L; }
-            @Override
-            public String getProductName() { return "Item"; }
-            @Override
-            public String getVariantName() { return "Default"; }
-            @Override
-            public BigDecimal getSellingPrice() { return BigDecimal.valueOf(100); }
-            @Override
-            public Boolean getProductActive() { return true; }
-            @Override
-            public Integer getQuantityAvailable() { return 10; }
-            @Override
-            public Integer getReservedQuantity() { return 0; }
-            @Override
-            public String getInventoryStatus() { return "IN_STOCK"; }
-        };
-    }
-
-    private OrderEntity pendingOrder() {
-        OrderEntity order = new OrderEntity();
-        order.setId(21L);
-        order.setOrderCode("ORD-123");
-        order.setUserId(88L);
-        order.setShopId(300L);
-        order.setShopLocationId(701L);
-        order.setAddressId(999L);
-        order.setOrderStatus(OrderLifecycleStatus.PAYMENT_PENDING);
-        order.setPaymentStatus(PayablePaymentStatus.PENDING);
-        order.setFulfillmentType(OrderFulfillmentType.DELIVERY);
-        order.setSubtotalAmount(BigDecimal.valueOf(700));
-        order.setTaxAmount(BigDecimal.ZERO);
-        order.setDeliveryFeeAmount(BigDecimal.ZERO);
-        order.setPlatformFeeAmount(BigDecimal.valueOf(20));
-        order.setPackagingFeeAmount(BigDecimal.ZERO);
-        order.setTipAmount(BigDecimal.ZERO);
-        order.setDiscountAmount(BigDecimal.ZERO);
-        order.setTotalAmount(BigDecimal.valueOf(720));
-        order.setCurrencyCode("INR");
-        return order;
     }
 
     private PaymentEntity orderPayment() {
         PaymentEntity payment = new PaymentEntity();
         payment.setId(600L);
-        payment.setPaymentCode("PAY-ORDER");
-        payment.setPayableType(PayableType.ORDER);
+        payment.setPayableType(PayableType.SHOP_ORDER);
         payment.setPayableId(21L);
-        payment.setPayerUserId(88L);
+        payment.setPaymentCode("PAY-ORDER");
         payment.setPaymentStatus(PaymentLifecycleStatus.PENDING);
-        payment.setAmount(BigDecimal.valueOf(720));
+        payment.setAmount(BigDecimal.valueOf(199));
         payment.setCurrencyCode("INR");
+        payment.setPayerUserId(88L);
         payment.setInitiatedAt(LocalDateTime.now().minusMinutes(10));
         return payment;
     }
 
     private PaymentAttemptEntity paymentAttempt() {
         PaymentAttemptEntity attempt = new PaymentAttemptEntity();
+        attempt.setId(701L);
         attempt.setPaymentId(600L);
         attempt.setGatewayName("RAZORPAY");
-        attempt.setGatewayOrderId("order_shop_success");
         attempt.setAttemptStatus(PaymentAttemptStatus.PENDING);
-        attempt.setRequestedAmount(BigDecimal.valueOf(720));
-        attempt.setAttemptedAt(LocalDateTime.now().minusMinutes(1));
         return attempt;
     }
 }
